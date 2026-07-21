@@ -1,0 +1,140 @@
+import RPi.GPIO as GPIO
+from time import sleep
+
+BUZZER = 19
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(BUZZER, GPIO.OUT)
+
+try:
+    while True:
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.7)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.7)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.7)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.7)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.7)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.7)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.1)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.7)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.05)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.05)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.05)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.8)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.05)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.05)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.05)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.8)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(0.05)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.05)
+        
+        GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+        sleep(8)
+        
+        GPIO.output(BUZZER, GPIO.LOW)   # 止める
+        sleep(0.8)
+        
+
+        
+        
+
+except KeyboardInterrupt:
+    pass
+
+finally:
+    GPIO.output(BUZZER, GPIO.LOW)
+    GPIO.cleanup()

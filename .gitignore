@@ -1,0 +1,19 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local tool / agent files
+.codex
+.agents/
+.lgd-*
+
+# Recordings / generated media
+recordings/
+*.mp4
+
+# OS / editor noise
+.DS_Store
+.vscode/
+
+# memo
+memo/
