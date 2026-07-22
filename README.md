@@ -1,21 +1,36 @@
+# Otemon PathFinder
+
+<p align="center">
+  <img src="images/Team_images/team_photo.JPG" alt="team_photo" width="45%">
+  <img src="images/Team_images/funny_photo.JPG" alt="funny_photo" width="45%">
+</p>
+
+
+
 # Robot
 
 ## 1. Robot Introduction
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R1.JPG" alt="Robot1" width="18%">
-  <img src="images/Robot_images/IMG_R2.JPG" alt="Robot2" width="18%">
-  <img src="images/Robot_images/IMG_R3.JPG" alt="Robot3" width="18%">
-  <img src="images/Robot_images/IMG_R4.JPG" alt="Robot4" width="18%">
-  <img src="images/Robot_images/IMG_R5.JPG" alt="Robot5" width="18%">
+  <img src="images/Robot_images/IMG_R1.JPG" alt="Robot1" width="10%">
+  <img src="images/Robot_images/IMG_R2.JPG" alt="Robot2" width="10%">
+  <img src="images/Robot_images/IMG_R3.JPG" alt="Robot3" width="10%">
 </p>
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R6.JPG" alt="Robot6" width="18%">
-  <img src="images/Robot_images/IMG_R7.JPG" alt="Robot7" width="18%">
-  <img src="images/Robot_images/IMG_R8.JPG" alt="Robot8" width="18%">
-  <img src="images/Robot_images/IMG_R9.JPG" alt="Robot9" width="18%">
-  <img src="images/Robot_images/IMG_R10.JPG" alt="Robot10" width="18%">
+  <img src="images/Robot_images/IMG_R4.JPG" alt="Robot4" width="10%">
+  <img src="images/Robot_images/IMG_R5.JPG" alt="Robot5" width="10%">
+  <img src="images/Robot_images/IMG_R6.JPG" alt="Robot6" width="10%">
+</p>
+
+<p align="center">
+  <img src="images/Robot_images/IMG_R7.JPG" alt="Robot7" width="10%">
+  <img src="images/Robot_images/IMG_R8.JPG" alt="Robot8" width="10%">
+  <img src="images/Robot_images/IMG_R9.JPG" alt="Robot9" width="10%">
+</p>
+
+<p align="center">
+  <img src="images/Robot_images/IMG_R10.JPG" alt="Robot10" width="10%">
 </p>
 
 ### Microcontroller
