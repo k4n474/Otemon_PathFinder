@@ -2,16 +2,21 @@
 
 ## 1. Robot Introduction
 
-![Robot1](images/robot_images/IMG_R1.JPG)
-![Robot2](images/robot_images/IMG_R2.JPG)
-![Robot3](images/robot_images/IMG_R3.JPG)
-![Robot4](images/robot_images/IMG_R4.JPG)
-![Robot5](images/robot_images/IMG_R5.JPG)
-![Robot6](images/robot_images/IMG_R6.JPG)
-![Robot7](images/robot_images/IMG_R7.JPG)
-![Robot8](images/robot_images/IMG_R8.JPG)
-![Robot9](images/robot_images/IMG_R9.JPG)
-![Robot10](images/robot_images/IMG_R10.JPG)
+<p align="center">
+  <img src="images/Robot_images/IMG_R1.JPG" alt="Robot1" width="18%">
+  <img src="images/Robot_images/IMG_R2.JPG" alt="Robot2" width="18%">
+  <img src="images/Robot_images/IMG_R3.JPG" alt="Robot3" width="18%">
+  <img src="images/Robot_images/IMG_R4.JPG" alt="Robot4" width="18%">
+  <img src="images/Robot_images/IMG_R5.JPG" alt="Robot5" width="18%">
+</p>
+
+<p align="center">
+  <img src="images/Robot_images/IMG_R6.JPG" alt="Robot6" width="18%">
+  <img src="images/Robot_images/IMG_R7.JPG" alt="Robot7" width="18%">
+  <img src="images/Robot_images/IMG_R8.JPG" alt="Robot8" width="18%">
+  <img src="images/Robot_images/IMG_R9.JPG" alt="Robot9" width="18%">
+  <img src="images/Robot_images/IMG_R10.JPG" alt="Robot10" width="18%">
+</p>
 
 ### Microcontroller
 
