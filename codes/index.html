@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>T-mini Plus Radar</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: #050b08;
+            color: #7cff9b;
+            font-family: monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        header {
+            width: 100%;
+            padding: 14px 20px;
+            border-bottom: 1px solid #1f5f35;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 20px;
+        }
+
+        #status {
+            color: #ffd166;
+        }
+
+        .controls {
+            width: min(900px, 95vw);
+            display: flex;
+            gap: 18px;
+            align-items: center;
+            padding: 12px 0;
+            flex-wrap: wrap;
+        }
+
+        label {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        input[type="range"] {
+            width: 180px;
+        }
+
+        .radar-container {
+            position: relative;
+            width: min(82vw, 82vh);
+            height: min(82vw, 82vh);
+            max-width: 760px;
+            max-height: 760px;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            border: 1px solid #1f5f35;
+            border-radius: 50%;
+            background: radial-gradient(
+                circle,
+                #0b1c12 0%,
+                #061009 65%,
+                #020604 100%
+            );
+        }
+
+        .info {
+            width: min(900px, 95vw);
+            padding: 12px;
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>T-mini Plus LiDAR Radar</h1>
+        <div id="status">接続中...</div>
+    </header>
+
+    <div class="controls">
+        <label>
+            表示範囲
+            <input
+                id="rangeSlider"
+                type="range"
+                min="500"
+                max="12000"
+                step="500"
+                value="3000"
+            >
+            <span id="rangeValue">3000 mm</span>
+        </label>
+
+        <label>
+            点サイズ
+            <input
+                id="pointSizeSlider"
+                type="range"
+                min="1"
+                max="8"
+                step="1"
+                value="3"
+            >
+            <span id="pointSizeValue">3 px</span>
+        </label>
+    </div>
+
+    <div class="radar-container">
+        <canvas id="radar"></canvas>
+    </div>
+
+    <div class="info">
+        <span id="pointCount">点数: 0</span>
+        <span id="nearest">最短距離: ---</span>
+        <span>上方向 = 0°</span>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("radar");
+        const ctx = canvas.getContext("2d");
+
+        const statusElement = document.getElementById("status");
+        const pointCountElement = document.getElementById("pointCount");
+        const nearestElement = document.getElementById("nearest");
+
+        const rangeSlider = document.getElementById("rangeSlider");
+        const rangeValue = document.getElementById("rangeValue");
+
+        const pointSizeSlider =
+            document.getElementById("pointSizeSlider");
+
+        const pointSizeValue =
+            document.getElementById("pointSizeValue");
+
+        let points = [];
+        let maxRange = Number(rangeSlider.value);
+        let pointSize = Number(pointSizeSlider.value);
+
+        /*
+         * Live ServerをRaspberry Pi自身で開く場合：
+         * http://localhost:8000/scan
+         *
+         * 別のPCからLive Serverを見る場合：
+         * http://RaspberryPiのIPアドレス:8000/scan
+         */
+        const API_URL = `http://${location.hostname}:8000/scan`;
+
+        function resizeCanvas() {
+            const rect = canvas.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+
+        function drawGrid(width, height) {
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const radius = Math.min(width, height) * 0.47;
+
+            ctx.strokeStyle = "rgba(80, 255, 130, 0.25)";
+            ctx.lineWidth = 1;
+
+            // 距離の円
+            for (let i = 1; i <= 4; i++) {
+                const ringRadius = radius * i / 4;
+
+                ctx.beginPath();
+                ctx.arc(
+                    centerX,
+                    centerY,
+                    ringRadius,
+                    0,
+                    Math.PI * 2
+                );
+                ctx.stroke();
+
+                const distance = maxRange * i / 4;
+
+                ctx.fillStyle = "rgba(124, 255, 155, 0.75)";
+                ctx.font = "12px monospace";
+                ctx.fillText(
+                    `${Math.round(distance)} mm`,
+                    centerX + 5,
+                    centerY - ringRadius + 15
+                );
+            }
+
+            // 十字線
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY - radius);
+            ctx.lineTo(centerX, centerY + radius);
+            ctx.moveTo(centerX - radius, centerY);
+            ctx.lineTo(centerX + radius, centerY);
+            ctx.stroke();
+
+            // 斜め線
+            ctx.save();
+            ctx.translate(centerX, centerY);
+
+            for (let angle = 0; angle < 360; angle += 45) {
+                const rad = angle * Math.PI / 180;
+
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(
+                    Math.sin(rad) * radius,
+                    -Math.cos(rad) * radius
+                );
+                ctx.stroke();
+            }
+
+            ctx.restore();
+
+            // 角度表示
+            ctx.fillStyle = "#7cff9b";
+            ctx.font = "14px monospace";
+
+            ctx.fillText("0°", centerX + 5, centerY - radius + 18);
+            ctx.fillText("90°", centerX + radius - 38, centerY - 7);
+            ctx.fillText("180°", centerX + 5, centerY + radius - 8);
+            ctx.fillText("270°", centerX - radius + 5, centerY - 7);
+        }
+
+        function drawSweep(width, height) {
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const radius = Math.min(width, height) * 0.47;
+
+            const time = performance.now() / 1000;
+            const angle = (time * 1.5) % (Math.PI * 2);
+
+            const gradient = ctx.createLinearGradient(
+                centerX,
+                centerY,
+                centerX + Math.sin(angle) * radius,
+                centerY - Math.cos(angle) * radius
+            );
+
+            gradient.addColorStop(0, "rgba(80, 255, 120, 0.05)");
+            gradient.addColorStop(1, "rgba(80, 255, 120, 0.6)");
+
+            ctx.strokeStyle = gradient;
+            ctx.lineWidth = 2;
+
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.lineTo(
+                centerX + Math.sin(angle) * radius,
+                centerY - Math.cos(angle) * radius
+            );
+            ctx.stroke();
+        }
+
+        function drawPoints(width, height) {
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const radius = Math.min(width, height) * 0.47;
+
+            let nearestDistance = Infinity;
+            let nearestAngle = 0;
+            let visibleCount = 0;
+
+            for (const point of points) {
+                if (
+                    point.distance <= 0
+                    || point.distance > maxRange
+                ) {
+                    continue;
+                }
+
+                const angleRad =
+                    point.angle * Math.PI / 180;
+
+                const normalizedDistance =
+                    point.distance / maxRange;
+
+                const x =
+                    centerX
+                    + Math.sin(angleRad)
+                    * normalizedDistance
+                    * radius;
+
+                const y =
+                    centerY
+                    - Math.cos(angleRad)
+                    * normalizedDistance
+                    * radius;
+
+                const intensity =
+                    Math.max(0, Math.min(255, point.intensity));
+
+                const brightness =
+                    0.45 + intensity / 255 * 0.55;
+
+                ctx.fillStyle =
+                    `rgba(100, 255, 140, ${brightness})`;
+
+                ctx.beginPath();
+                ctx.arc(x, y, pointSize, 0, Math.PI * 2);
+                ctx.fill();
+
+                visibleCount++;
+
+                if (point.distance < nearestDistance) {
+                    nearestDistance = point.distance;
+                    nearestAngle = point.angle;
+                }
+            }
+
+            pointCountElement.textContent =
+                `表示点数: ${visibleCount}`;
+
+            if (Number.isFinite(nearestDistance)) {
+                nearestElement.textContent =
+                    `最短距離: ${nearestDistance.toFixed(0)} mm `
+                    + `@ ${nearestAngle.toFixed(1)}°`;
+            } else {
+                nearestElement.textContent = "最短距離: ---";
+            }
+        }
+
+        function drawRadar() {
+            const rect = canvas.getBoundingClientRect();
+            const width = rect.width;
+            const height = rect.height;
+
+            ctx.clearRect(0, 0, width, height);
+
+            drawGrid(width, height);
+            drawSweep(width, height);
+            drawPoints(width, height);
+
+            requestAnimationFrame(drawRadar);
+        }
+
+        async function updateScan() {
+            try {
+                const response = await fetch(API_URL, {
+                    cache: "no-store"
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                points = data.points || [];
+
+                statusElement.textContent =
+                    `接続済み・受信点数 ${data.count}`;
+
+                statusElement.style.color = "#7cff9b";
+
+            } catch (error) {
+                statusElement.textContent =
+                    `接続失敗: ${error.message}`;
+
+                statusElement.style.color = "#ff6868";
+            }
+        }
+
+        rangeSlider.addEventListener("input", () => {
+            maxRange = Number(rangeSlider.value);
+            rangeValue.textContent = `${maxRange} mm`;
+        });
+
+        pointSizeSlider.addEventListener("input", () => {
+            pointSize = Number(pointSizeSlider.value);
+            pointSizeValue.textContent = `${pointSize} px`;
+        });
+
+        window.addEventListener("resize", resizeCanvas);
+
+        resizeCanvas();
+        drawRadar();
+
+        updateScan();
+        setInterval(updateScan, 50);
+    </script>
+</body>
+</html>

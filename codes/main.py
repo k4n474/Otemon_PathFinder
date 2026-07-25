@@ -266,7 +266,7 @@ def select_front_object(result):
 
     return selected_color, selected_object
 
-def avoid_obj(duty_cycle, straight_seconds=0.6, back_seconds=1.5):
+def avoid_obj(duty_cycle, straight_seconds=0.6, back_seconds=0.5):
     """
     一番手前に見えているオブジェクトに合わせてPID制御しながら前進する。
 
@@ -276,10 +276,10 @@ def avoid_obj(duty_cycle, straight_seconds=0.6, back_seconds=1.5):
     十分端に寄っていたらステアリングを戻し、straight_seconds 秒だけ直進する。
     """
     frame_width = FRAME_SIZE[0]
-    red_target_x = 30
-    green_target_x = frame_width - 30
+    red_target_x = 40
+    green_target_x = frame_width - 40
     max_angle = 50
-    kp = 0.1
+    kp = 0.4
     ki = 0
     kd = 0.01
     pid = PIDController(kp=kp, ki=ki, kd=kd, integral_limit=300)
@@ -334,12 +334,12 @@ def avoid_obj(duty_cycle, straight_seconds=0.6, back_seconds=1.5):
 
             if color_name == "red":
                 if ab == 0:
-                    target_x = red_target_x  # 35.8+6800/(current_height+1.2)
+                    target_x = 35.8+6800/(current_height+1.2)
                 else:
                     target_x = red_target_x
             else:
                 if ab == 0:
-                    target_x = green_target_x  # 480-(35.8+6800/(current_height+1.2))
+                    target_x = 480-(35.8+6800/(current_height+1.2))
                 else:
                     target_x = green_target_x
 
@@ -372,7 +372,7 @@ def find_obj(duty_cycle, rd):
     Returns:
         str | None: 見つけた色名。中断されたら None
     """
-    steering_angle=40
+    steering_angle=180
     try:
         if rd == 0:
             set_angle(steering_angle)
@@ -407,10 +407,10 @@ def main():
             print(f"録画開始: {detector.recording_path}")
 
 
-        # while True:
-            # find_obj(70, 1)
-            # avoid_obj(70)
-        
+        while True:
+            buzzer_sleep(0.1)
+            find_obj(50,1)
+            avoid_obj(50)
         
         
         
@@ -442,7 +442,7 @@ def main():
     finally:
         detector.stop()
         if detector.recording_path is not None:
-            print(f"録画保存: scp 10.178.179.239:{detector.recording_path} ~/workspace/pivideos")
+            print(f"録画保存: scp 10.112.120.239:{detector.recording_path} ~/workspace/pivideos")
         cleanup()
         print("cleanup")
 
