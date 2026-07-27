@@ -24,15 +24,17 @@ from newobot import dc_motor, set_angle, stop, cleanup
 #     motor_in2.value = 0
 
 try:
+    while True:
+        
+        # 30%の強さで1秒だけ回す
+        set_angle(0)
 
-    # 30%の強さで1秒だけ回す
-    set_angle(-50)
+        dc_motor(50)
 
-    dc_motor(-35)
+        sleep(5)
 
-    sleep(5)
+        stop()
 
-    stop()
 
 finally:
 

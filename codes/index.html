@@ -2,12 +2,13 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
+
     <meta
         name="viewport"
         content="width=device-width, initial-scale=1.0"
     >
 
-    <title>T-mini Plus Radar</title>
+    <title>T-mini Plus Viewer</title>
 
     <style>
         * {
@@ -17,392 +18,502 @@
         body {
             margin: 0;
             min-height: 100vh;
-            background: #050b08;
-            color: #7cff9b;
-            font-family: monospace;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-
-        header {
-            width: 100%;
-            padding: 14px 20px;
-            border-bottom: 1px solid #1f5f35;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            background: #111;
+            color: white;
+            font-family: Arial, sans-serif;
+            text-align: center;
         }
 
         h1 {
-            margin: 0;
-            font-size: 20px;
+            margin: 18px 0 6px;
         }
 
         #status {
-            color: #ffd166;
+            min-height: 26px;
+            margin-bottom: 10px;
+            font-size: 17px;
         }
 
-        .controls {
-            width: min(900px, 95vw);
-            display: flex;
-            gap: 18px;
-            align-items: center;
-            padding: 12px 0;
-            flex-wrap: wrap;
+        #frontWallAlert {
+            width: min(760px, 94vw);
+            margin: 0 auto 12px;
+            padding: 12px;
+            border: 2px solid #475569;
+            border-radius: 8px;
+            background: #1e293b;
+            color: #cbd5e1;
+            font-size: 20px;
+            font-weight: bold;
         }
 
-        label {
-            display: flex;
-            gap: 8px;
-            align-items: center;
+        #frontWallAlert.detected {
+            border-color: #ff3b30;
+            background: #7f1d1d;
+            color: white;
         }
 
-        input[type="range"] {
-            width: 180px;
+        #sideWalls {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            width: min(760px, 94vw);
+            margin: 0 auto 12px;
         }
 
-        .radar-container {
-            position: relative;
-            width: min(82vw, 82vh);
-            height: min(82vw, 82vh);
-            max-width: 760px;
-            max-height: 760px;
+        .side-wall {
+            padding: 12px;
+            border: 2px solid #475569;
+            border-radius: 8px;
+            background: #1e293b;
+        }
+
+        .side-wall.tracing {
+            border-color: #22d3ee;
+            background: #164e63;
+        }
+
+        .side-wall strong,
+        .side-wall span {
+            display: block;
+        }
+
+        .side-wall strong {
+            margin-bottom: 6px;
+            font-size: 18px;
+        }
+
+        .side-wall span {
+            line-height: 1.5;
         }
 
         canvas {
-            width: 100%;
-            height: 100%;
-            border: 1px solid #1f5f35;
-            border-radius: 50%;
-            background: radial-gradient(
-                circle,
-                #0b1c12 0%,
-                #061009 65%,
-                #020604 100%
-            );
-        }
-
-        .info {
-            width: min(900px, 95vw);
-            padding: 12px;
-            display: flex;
-            justify-content: space-between;
-            gap: 20px;
-            flex-wrap: wrap;
+            width: min(760px, 94vw);
+            height: auto;
+            background: #1b1b1b;
+            border: 1px solid #555;
         }
     </style>
 </head>
 
 <body>
-    <header>
-        <h1>T-mini Plus LiDAR Radar</h1>
-        <div id="status">接続中...</div>
-    </header>
+    <h1>T-mini Plus Live Viewer</h1>
 
-    <div class="controls">
-        <label>
-            表示範囲
-            <input
-                id="rangeSlider"
-                type="range"
-                min="500"
-                max="12000"
-                step="500"
-                value="3000"
-            >
-            <span id="rangeValue">3000 mm</span>
-        </label>
-
-        <label>
-            点サイズ
-            <input
-                id="pointSizeSlider"
-                type="range"
-                min="1"
-                max="8"
-                step="1"
-                value="3"
-            >
-            <span id="pointSizeValue">3 px</span>
-        </label>
+    <div id="status">
+        LiDAR APIへ接続中...
     </div>
 
-    <div class="radar-container">
-        <canvas id="radar"></canvas>
+    <div id="frontWallAlert">
+        前方の壁: 未検出
     </div>
 
-    <div class="info">
-        <span id="pointCount">点数: 0</span>
-        <span id="nearest">最短距離: ---</span>
-        <span>上方向 = 0°</span>
+    <div id="sideWalls">
+        <div id="leftWall" class="side-wall">
+            <strong>左壁</strong>
+            <span>None</span>
+        </div>
+        <div id="rightWall" class="side-wall">
+            <strong>右壁</strong>
+            <span>None</span>
+        </div>
     </div>
+
+    <canvas
+        id="lidarCanvas"
+        width="760"
+        height="760"
+    ></canvas>
 
     <script>
-        const canvas = document.getElementById("radar");
-        const ctx = canvas.getContext("2d");
+        // Live ServerがRaspberry Pi以外で動く場合は、
+        // ?apiHost=192.168.x.x のようにLiDAR側のIPを指定する。
+        const apiHost =
+            new URLSearchParams(location.search).get("apiHost")
+            || location.hostname
+            || "localhost";
 
-        const statusElement = document.getElementById("status");
-        const pointCountElement = document.getElementById("pointCount");
-        const nearestElement = document.getElementById("nearest");
+        const API_URL =
+            `http://${apiHost}:5000/api/points`;
 
-        const rangeSlider = document.getElementById("rangeSlider");
-        const rangeValue = document.getElementById("rangeValue");
+        const canvas =
+            document.getElementById("lidarCanvas");
 
-        const pointSizeSlider =
-            document.getElementById("pointSizeSlider");
+        const ctx =
+            canvas.getContext("2d");
 
-        const pointSizeValue =
-            document.getElementById("pointSizeValue");
+        const statusElement =
+            document.getElementById("status");
 
-        let points = [];
-        let maxRange = Number(rangeSlider.value);
-        let pointSize = Number(pointSizeSlider.value);
+        const frontWallAlert =
+            document.getElementById("frontWallAlert");
 
-        /*
-         * Live ServerをRaspberry Pi自身で開く場合：
-         * http://localhost:8000/scan
-         *
-         * 別のPCからLive Serverを見る場合：
-         * http://RaspberryPiのIPアドレス:8000/scan
-         */
-        const API_URL = `http://${location.hostname}:8000/scan`;
+        const leftWallElement =
+            document.getElementById("leftWall");
 
-        function resizeCanvas() {
-            const rect = canvas.getBoundingClientRect();
-            const dpr = window.devicePixelRatio || 1;
+        const rightWallElement =
+            document.getElementById("rightWall");
 
-            canvas.width = rect.width * dpr;
-            canvas.height = rect.height * dpr;
+        const centerX =
+            canvas.width / 2;
 
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        }
+        const centerY =
+            canvas.height / 2;
 
-        function drawGrid(width, height) {
-            const centerX = width / 2;
-            const centerY = height / 2;
-            const radius = Math.min(width, height) * 0.47;
+        // 表示最大距離
+        const MAXIMUM_DISTANCE = 3000;
 
-            ctx.strokeStyle = "rgba(80, 255, 130, 0.25)";
-            ctx.lineWidth = 1;
+        // 向きがずれる場合に変更
+        const ANGLE_OFFSET = 0;
 
-            // 距離の円
-            for (let i = 1; i <= 4; i++) {
-                const ringRadius = radius * i / 4;
+        // 左右が逆の場合はtrue
+        const INVERT_ANGLE = false;
 
-                ctx.beginPath();
-                ctx.arc(
-                    centerX,
-                    centerY,
-                    ringRadius,
-                    0,
-                    Math.PI * 2
-                );
-                ctx.stroke();
+        const scale =
+            (canvas.width / 2 - 30)
+            / MAXIMUM_DISTANCE;
 
-                const distance = maxRange * i / 4;
+        let requesting = false;
 
-                ctx.fillStyle = "rgba(124, 255, 155, 0.75)";
-                ctx.font = "12px monospace";
-                ctx.fillText(
-                    `${Math.round(distance)} mm`,
-                    centerX + 5,
-                    centerY - ringRadius + 15
-                );
+
+        async function updateLidar() {
+            if (requesting) {
+                return;
             }
 
-            // 十字線
-            ctx.beginPath();
-            ctx.moveTo(centerX, centerY - radius);
-            ctx.lineTo(centerX, centerY + radius);
-            ctx.moveTo(centerX - radius, centerY);
-            ctx.lineTo(centerX + radius, centerY);
-            ctx.stroke();
+            requesting = true;
 
-            // 斜め線
-            ctx.save();
-            ctx.translate(centerX, centerY);
-
-            for (let angle = 0; angle < 360; angle += 45) {
-                const rad = angle * Math.PI / 180;
-
-                ctx.beginPath();
-                ctx.moveTo(0, 0);
-                ctx.lineTo(
-                    Math.sin(rad) * radius,
-                    -Math.cos(rad) * radius
+            try {
+                const response = await fetch(
+                    API_URL,
+                    {
+                        cache: "no-store"
+                    }
                 );
-                ctx.stroke();
+
+                if (!response.ok) {
+                    throw new Error(
+                        `HTTP ${response.status}`
+                    );
+                }
+
+                const data =
+                    await response.json();
+
+                if (!Array.isArray(data.points)) {
+                    throw new Error(
+                        "点群形式が不正です"
+                    );
+                }
+
+                const walls =
+                    Array.isArray(data.walls)
+                    ? data.walls
+                    : [];
+
+                draw(data.points, walls);
+                updateFrontWallAlert(data.front_wall);
+                updateSideWalls(data.side_walls);
+
+                statusElement.textContent =
+                    `取得点数: ${data.count}`
+                    + ` / 検出壁数: ${walls.length}`
+                    + ` / API: ${apiHost}:5000`;
+
+            } catch (error) {
+                console.error(error);
+
+                statusElement.textContent =
+                    `接続エラー: ${error.message}`;
+                frontWallAlert.textContent =
+                    "前方の壁: 判定できません";
+                frontWallAlert.classList.remove("detected");
+                updateSideWalls(null);
+
+            } finally {
+                requesting = false;
+            }
+        }
+
+        function updateFrontWallAlert(frontWall) {
+            const distance =
+                Number(frontWall?.front_distance);
+
+            if (frontWall && Number.isFinite(distance)) {
+                frontWallAlert.textContent =
+                    `⚠ 前方に壁あり: ${Math.round(distance)} mm`;
+                frontWallAlert.classList.add("detected");
+                return;
             }
 
-            ctx.restore();
-
-            // 角度表示
-            ctx.fillStyle = "#7cff9b";
-            ctx.font = "14px monospace";
-
-            ctx.fillText("0°", centerX + 5, centerY - radius + 18);
-            ctx.fillText("90°", centerX + radius - 38, centerY - 7);
-            ctx.fillText("180°", centerX + 5, centerY + radius - 8);
-            ctx.fillText("270°", centerX - radius + 5, centerY - 7);
+            frontWallAlert.textContent =
+                "前方の壁: 未検出";
+            frontWallAlert.classList.remove("detected");
         }
 
-        function drawSweep(width, height) {
-            const centerX = width / 2;
-            const centerY = height / 2;
-            const radius = Math.min(width, height) * 0.47;
+        function updateSideWalls(sideWalls) {
+            const traceSide =
+                sideWalls?.trace?.side ?? null;
 
-            const time = performance.now() / 1000;
-            const angle = (time * 1.5) % (Math.PI * 2);
-
-            const gradient = ctx.createLinearGradient(
-                centerX,
-                centerY,
-                centerX + Math.sin(angle) * radius,
-                centerY - Math.cos(angle) * radius
+            updateSideWall(
+                leftWallElement,
+                "左壁",
+                sideWalls?.left,
+                traceSide === "left"
             );
-
-            gradient.addColorStop(0, "rgba(80, 255, 120, 0.05)");
-            gradient.addColorStop(1, "rgba(80, 255, 120, 0.6)");
-
-            ctx.strokeStyle = gradient;
-            ctx.lineWidth = 2;
-
-            ctx.beginPath();
-            ctx.moveTo(centerX, centerY);
-            ctx.lineTo(
-                centerX + Math.sin(angle) * radius,
-                centerY - Math.cos(angle) * radius
+            updateSideWall(
+                rightWallElement,
+                "右壁",
+                sideWalls?.right,
+                traceSide === "right"
             );
-            ctx.stroke();
         }
 
-        function drawPoints(width, height) {
-            const centerX = width / 2;
-            const centerY = height / 2;
-            const radius = Math.min(width, height) * 0.47;
+        function updateSideWall(
+            element,
+            label,
+            wall,
+            isTracing
+        ) {
+            if (!wall) {
+                element.innerHTML =
+                    `<strong>${label}</strong><span>None</span>`;
+                element.classList.remove("tracing");
+                return;
+            }
 
-            let nearestDistance = Infinity;
-            let nearestAngle = 0;
-            let visibleCount = 0;
+            const distance =
+                Math.round(Number(wall.wall_distance));
+            const length =
+                Math.round(Number(wall.length));
+            const traceText =
+                isTracing ? " / 追従候補" : "";
+
+            element.innerHTML =
+                `<strong>${label}${traceText}</strong>`
+                + `<span>距離: ${distance} mm</span>`
+                + `<span>長さ: ${length} mm</span>`;
+            element.classList.toggle("tracing", isTracing);
+        }
+
+
+        function convertAngle(angle) {
+            let converted = Number(angle);
+
+            if (INVERT_ANGLE) {
+                converted = -converted;
+            }
+
+            converted += ANGLE_OFFSET;
+
+            converted %= 360;
+
+            if (converted < 0) {
+                converted += 360;
+            }
+
+            return converted;
+        }
+
+
+        function draw(points, walls) {
+            ctx.clearRect(
+                0,
+                0,
+                canvas.width,
+                canvas.height
+            );
+
+            drawGrid();
+
+            ctx.fillStyle = "#00ff88";
 
             for (const point of points) {
+                const angle =
+                    convertAngle(point.angle);
+
+                const distance =
+                    Number(point.distance);
+
                 if (
-                    point.distance <= 0
-                    || point.distance > maxRange
+                    !Number.isFinite(angle)
+                    || !Number.isFinite(distance)
                 ) {
                     continue;
                 }
 
-                const angleRad =
-                    point.angle * Math.PI / 180;
+                if (
+                    distance < 50
+                    || distance > MAXIMUM_DISTANCE
+                ) {
+                    continue;
+                }
 
-                const normalizedDistance =
-                    point.distance / maxRange;
+                const radians =
+                    angle * Math.PI / 180;
+
+                const radius =
+                    distance * scale;
 
                 const x =
                     centerX
-                    + Math.sin(angleRad)
-                    * normalizedDistance
+                    + Math.sin(radians)
                     * radius;
 
                 const y =
                     centerY
-                    - Math.cos(angleRad)
-                    * normalizedDistance
+                    - Math.cos(radians)
                     * radius;
 
-                const intensity =
-                    Math.max(0, Math.min(255, point.intensity));
+                ctx.beginPath();
 
-                const brightness =
-                    0.45 + intensity / 255 * 0.55;
+                ctx.arc(
+                    x,
+                    y,
+                    2,
+                    0,
+                    Math.PI * 2
+                );
 
-                ctx.fillStyle =
-                    `rgba(100, 255, 140, ${brightness})`;
+                ctx.fill();
+            }
+
+            drawWalls(walls);
+            drawRobot();
+        }
+
+
+        function drawWalls(walls) {
+            ctx.lineWidth = 5;
+            ctx.lineCap = "round";
+
+            for (const wall of walls) {
+                if (!wall.start || !wall.end) {
+                    continue;
+                }
+
+                const values = [
+                    wall.start.x,
+                    wall.start.y,
+                    wall.end.x,
+                    wall.end.y
+                ].map(Number);
+
+                if (!values.every(Number.isFinite)) {
+                    continue;
+                }
+
+                const [startX, startY, endX, endY] =
+                    values;
+
+                ctx.strokeStyle =
+                    wall.is_front_wall
+                    ? "#ff3b30"
+                    : "#ffcc00";
+                ctx.lineWidth =
+                    wall.is_front_wall
+                    ? 8
+                    : 5;
 
                 ctx.beginPath();
-                ctx.arc(x, y, pointSize, 0, Math.PI * 2);
-                ctx.fill();
-
-                visibleCount++;
-
-                if (point.distance < nearestDistance) {
-                    nearestDistance = point.distance;
-                    nearestAngle = point.angle;
-                }
+                ctx.moveTo(
+                    centerX + startX * scale,
+                    centerY - startY * scale
+                );
+                ctx.lineTo(
+                    centerX + endX * scale,
+                    centerY - endY * scale
+                );
+                ctx.stroke();
             }
 
-            pointCountElement.textContent =
-                `表示点数: ${visibleCount}`;
+            ctx.lineCap = "butt";
+        }
 
-            if (Number.isFinite(nearestDistance)) {
-                nearestElement.textContent =
-                    `最短距離: ${nearestDistance.toFixed(0)} mm `
-                    + `@ ${nearestAngle.toFixed(1)}°`;
-            } else {
-                nearestElement.textContent = "最短距離: ---";
+
+        function drawGrid() {
+            ctx.strokeStyle = "#444";
+            ctx.fillStyle = "#aaa";
+            ctx.lineWidth = 1;
+            ctx.font = "12px Arial";
+
+            for (
+                let distance = 500;
+                distance <= MAXIMUM_DISTANCE;
+                distance += 500
+            ) {
+                const radius =
+                    distance * scale;
+
+                ctx.beginPath();
+
+                ctx.arc(
+                    centerX,
+                    centerY,
+                    radius,
+                    0,
+                    Math.PI * 2
+                );
+
+                ctx.stroke();
+
+                ctx.fillText(
+                    `${distance} mm`,
+                    centerX + 6,
+                    centerY - radius + 14
+                );
             }
+
+            ctx.beginPath();
+            ctx.moveTo(centerX, 0);
+            ctx.lineTo(centerX, canvas.height);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(0, centerY);
+            ctx.lineTo(canvas.width, centerY);
+            ctx.stroke();
         }
 
-        function drawRadar() {
-            const rect = canvas.getBoundingClientRect();
-            const width = rect.width;
-            const height = rect.height;
 
-            ctx.clearRect(0, 0, width, height);
+        function drawRobot() {
+            ctx.fillStyle = "red";
 
-            drawGrid(width, height);
-            drawSweep(width, height);
-            drawPoints(width, height);
+            ctx.beginPath();
 
-            requestAnimationFrame(drawRadar);
+            ctx.arc(
+                centerX,
+                centerY,
+                6,
+                0,
+                Math.PI * 2
+            );
+
+            ctx.fill();
+
+            ctx.strokeStyle = "red";
+            ctx.lineWidth = 3;
+
+            ctx.beginPath();
+
+            ctx.moveTo(
+                centerX,
+                centerY
+            );
+
+            ctx.lineTo(
+                centerX,
+                centerY - 30
+            );
+
+            ctx.stroke();
         }
 
-        async function updateScan() {
-            try {
-                const response = await fetch(API_URL, {
-                    cache: "no-store"
-                });
 
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
+        updateLidar();
 
-                const data = await response.json();
-
-                points = data.points || [];
-
-                statusElement.textContent =
-                    `接続済み・受信点数 ${data.count}`;
-
-                statusElement.style.color = "#7cff9b";
-
-            } catch (error) {
-                statusElement.textContent =
-                    `接続失敗: ${error.message}`;
-
-                statusElement.style.color = "#ff6868";
-            }
-        }
-
-        rangeSlider.addEventListener("input", () => {
-            maxRange = Number(rangeSlider.value);
-            rangeValue.textContent = `${maxRange} mm`;
-        });
-
-        pointSizeSlider.addEventListener("input", () => {
-            pointSize = Number(pointSizeSlider.value);
-            pointSizeValue.textContent = `${pointSize} px`;
-        });
-
-        window.addEventListener("resize", resizeCanvas);
-
-        resizeCanvas();
-        drawRadar();
-
-        updateScan();
-        setInterval(updateScan, 50);
+        setInterval(
+            updateLidar,
+            100
+        );
     </script>
 </body>
 </html>

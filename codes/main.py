@@ -409,8 +409,8 @@ def main():
 
         while True:
             buzzer_sleep(0.1)
-            find_obj(50,1)
-            avoid_obj(50)
+            find_obj(70,1)
+            avoid_obj(70)
         
         
         
