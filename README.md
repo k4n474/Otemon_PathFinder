@@ -12,31 +12,31 @@
 ## 1. Robot Introduction
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R1.JPG" alt="Robot1" width="50%">
-  <img src="images/Robot_images/IMG_R2.JPG" alt="Robot2" width="50%">
+  <img src="images/Robot_images/IMG_R1.JPG" alt="Robot1" width="45%">
+  <img src="images/Robot_images/IMG_R2.JPG" alt="Robot2" width="45%">
 </p>
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R3.JPG" alt="Robot3" width="50%">
-  <img src="images/Robot_images/IMG_R4.JPG" alt="Robot4" width="50%">
+  <img src="images/Robot_images/IMG_R3.JPG" alt="Robot3" width="45%">
+  <img src="images/Robot_images/IMG_R4.JPG" alt="Robot4" width="45%">
 </p>
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R5.JPG" alt="Robot5" width="50%">
-  <img src="images/Robot_images/IMG_R6.JPG" alt="Robot6" width="50%">
+  <img src="images/Robot_images/IMG_R5.JPG" alt="Robot5" width="45%">
+  <img src="images/Robot_images/IMG_R6.JPG" alt="Robot6" width="45%">
 </p>
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R7.JPG" alt="Robot7" width="50%">
-  <img src="images/Robot_images/IMG_R8.JPG" alt="Robot8" width="50%">
+  <img src="images/Robot_images/IMG_R7.JPG" alt="Robot7" width="45%">
+  <img src="images/Robot_images/IMG_R8.JPG" alt="Robot8" width="45%">
 </p>
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R9.JPG" alt="Robot9" width="50%">
-  <img src="images/Robot_images/IMG_R10.JPG" alt="Robot10" width="50%">
+  <img src="images/Robot_images/IMG_R9.JPG" alt="Robot9" width="45%">
+  <img src="images/Robot_images/IMG_R10.JPG" alt="Robot10" width="45%">
 </p>
 
-### Controller
+## Controller
 
 Our robot uses a **Raspberry Pi 5** as its main controller.
 
@@ -46,7 +46,7 @@ Unlike a conventional microcontroller, the Raspberry Pi is a compact computer th
 
 At the beginning of development, we used a **Raspberry Pi 4**. However, image processing required more computational power than expected, making real-time control difficult in some situations. After upgrading to the Raspberry Pi 5, image processing became significantly faster, resulting in much more stable driving performance.
 
-### LiDAR
+## LiDAR
 
 Our robot uses a **LiDAR** for wall detection, distance measurement, and wall following.
 
@@ -56,7 +56,7 @@ One of the greatest challenges during development was designing an algorithm cap
 
 ![LiDAR](images/Other_images/LiDAR_screen.png)
 
-### Camera
+## Camera
 
 At the beginning of development, we used a **HuskyLens** because it allowed us to implement object recognition relatively easily. However, we found limitations in both recognition accuracy and flexibility, so we decided to develop our own image recognition program from scratch.
 
@@ -65,15 +65,15 @@ We use a **Raspberry Pi Camera Module 3 Wide** because of its excellent compatib
 The captured RGB image is first converted into the **HSV color space**. HSV consists of **Hue, Saturation, and Value,** and is less affected by changes in lighting conditions than RGB. This enables the robot to distinguish red and green objects more reliably by using hue information.
 
 <p align="center">
-  <img src="images/Other_images/RGB_image.png" alt="Robot9" width="50%">
-  <img src="images/Other_images/RGB_image.png" alt="Robot10" width="50%">
+  <img src="images/Other_images/RGB_image.png" alt="Robot9" width="45%">
+  <img src="images/Other_images/HSV_image.png" alt="Robot10" width="45%">
 </p>
 
 After the conversion, separate color masks are applied to the red and green objects, followed by binary thresholding to extract only the target objects. Contour detection is then performed to obtain the coordinates of the four corners of each object. These coordinates are used to determine each object’s position and color, and the resulting information is used for navigation.
 
 ![Camera](images/Other_images/camera_screen.png)
 
-### Chassis
+## Chassis
 
 Most of the robot’s mechanical components, excluding electronic parts, were designed by our team and manufactured using **3D printers**. This allowed us to create custom parts that would have been difficult or impossible to produce using commercially available components, enabling a structure optimized specifically for our robot.
 
@@ -83,7 +83,7 @@ We use both a **Bambu Lab A1** and a **Bambu Lab X2D** for manufacturing. At the
 
 Compared with the A1, the X2D provides higher printing speed and better print quality, enabling us to manufacture high-quality components in a shorter amount of time. We currently use both printers according to the requirements of each part.
 
-### Steering Mechanism
+## Steering Mechanism
 
 Initially, our robot used a conventional steering mechanism. However, it could not achieve sufficient turning performance when negotiating sharp corners.
 
@@ -98,7 +98,7 @@ A **differential gear** is also installed on the rear axle. During cornering, it
 ![Gear](images/Robot_images/gear_image.png)
 
 
-### Electrical System
+## Electrical System
 
 To prevent voltage drops and electrical noise generated by the drive motors from affecting the control system, our robot uses **separate power supplies for the drive system and the control system.**
 
