@@ -66,7 +66,7 @@ The captured RGB image is first converted into the **HSV color space**. HSV cons
 
 <p align="center">
   <img src="images/Other_images/RGB_image.png" alt="Robot9" width="45%">
-  <img src="images/Other_images/HSV_image.png" alt="Robot10" width="45%">
+  <img src="images/Other_images/HSV_image.jpg" alt="Robot10" width="45%">
 </p>
 
 After the conversion, separate color masks are applied to the red and green objects, followed by binary thresholding to extract only the target objects. Contour detection is then performed to obtain the coordinates of the four corners of each object. These coordinates are used to determine each object’s position and color, and the resulting information is used for navigation.
