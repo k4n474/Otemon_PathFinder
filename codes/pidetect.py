@@ -4,16 +4,12 @@
 実際のメイン制御は main_program.py から camera_detector を読み込んで使う。
 """
 
-import argparse
-
 import numpy as np
 
 from camera_detector import FRAME_SIZE, PiColorDetector
 
 
 FAR_OBJECT_AREA_MAX = 3500
-
-
 def classify_obj_position(obj):
     """
     検出したオブジェクトを6箇所のどれかに分類する。
@@ -39,6 +35,7 @@ def build_position_lines(result, max_objects=2):
     for color_name, objects in (
         ("RED", result["red_objects"]),
         ("GREEN", result["green_objects"]),
+        ("MAGENTA", result["magenta_objects"]),
     ):
         for color_index, obj in enumerate(objects, start=1):
             candidates.append((color_name, color_index, obj))
@@ -69,16 +66,10 @@ def format_console_detection(name, objects):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--wall-only", action="store_true", help="色検出を止めて境界線だけ検出する")
-    mode.add_argument("--objects-only", action="store_true", help="境界線検出を止めて色だけ検出する")
-    args = parser.parse_args()
-
     detector = PiColorDetector(
         enable_preview=True,
-        detect_objects_enabled=not args.wall_only,
-        detect_boundary_enabled=not args.objects_only,
+        detect_objects_enabled=True,
+        detect_boundary_enabled=True,
     )
 
     try:
@@ -93,21 +84,28 @@ def main():
     print(f"RED mean={np.round(detector.models['red']['mean'], 1)} std={np.round(detector.models['red']['std'], 1)}")
     print(f"GREEN mean={np.round(detector.models['green']['mean'], 1)} std={np.round(detector.models['green']['std'], 1)}")
     print(f"OTHER mean={np.round(detector.models['other']['mean'], 1)} std={np.round(detector.models['other']['std'], 1)}")
-    print(f"色検出: {'disabled' if args.wall_only else 'enabled'}")
-    print(f"境界線検出: {'disabled' if args.objects_only else 'enabled'}")
     print(f"ブラウザ表示: http://localhost:{detector.preview_port}")
     print("VS Code の Port Forwarding で 8000 番を Mac 側に転送して開いてください。")
 
     try:
         while True:
             result = detector.process_once()
+            line_angle_deg = result["line_angle_deg"]
+            line_angle_status = (
+                f"LINE angle={line_angle_deg:.1f} deg"
+                if line_angle_deg is not None
+                else "LINE angle: not found"
+            )
             position_lines = build_position_lines(result)
             status = " | ".join(
                 (
                     format_console_detection("RED", result["red_objects"]),
                     format_console_detection("GREEN", result["green_objects"]),
-                    " / ".join(position_lines),
+                    format_console_detection("MAGENTA", result["magenta_objects"]),
                     result["boundary_status"],
+                    result["blue_line_status"],
+                    line_angle_status,
+                    " / ".join(position_lines),
                 )
             )
 

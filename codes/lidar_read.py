@@ -24,6 +24,7 @@ class LidarReader:
     CMD_PREFIX = 0xA5
     CMD_SCAN = 0x60
     CMD_STOP = 0x65
+    CMD_SCAN_FREQUENCY_ADD_1HZ = 0x0B
 
     # 後方180度を中心に左右60度ずつ取得しない
     REAR_EXCLUSION_START = 120.0
@@ -32,10 +33,15 @@ class LidarReader:
     def __init__(
         self,
         port: str = "/dev/serial0",
-        baudrate: int = 230400
+        baudrate: int = 230400,
+        scan_frequency_increase_hz: int = 0
     ) -> None:
         self.port = port
         self.baudrate = baudrate
+        self.scan_frequency_increase_hz = max(
+            0,
+            min(int(scan_frequency_increase_hz), 6)
+        )
 
         self.serial_port: Optional[serial.Serial] = None
 
@@ -49,6 +55,8 @@ class LidarReader:
         self._last_error: Optional[str] = None
         self._packet_count = 0
         self._checksum_error_count = 0
+        self._scan_fps = 0.0
+        self._last_scan_time: Optional[float] = None
 
     @property
     def running(self) -> bool:
@@ -82,6 +90,20 @@ class LidarReader:
         # 古い受信データを捨てる
         self.serial_port.reset_input_buffer()
         self.serial_port.reset_output_buffer()
+
+        # T-mini Plusは停止中に0xA5 0x0Bを送ると
+        # スキャン周波数が1 Hz増加する（上限12 Hz）。
+        for _ in range(self.scan_frequency_increase_hz):
+            self._send_command(
+                self.CMD_SCAN_FREQUENCY_ADD_1HZ
+            )
+            time.sleep(0.05)
+
+        if self.scan_frequency_increase_hz:
+            # 周波数設定コマンドの応答を読み捨ててから
+            # スキャンデータの受信を開始する。
+            time.sleep(0.1)
+            self.serial_port.reset_input_buffer()
 
         # スキャン開始
         self._send_command(self.CMD_SCAN)
@@ -125,12 +147,20 @@ class LidarReader:
         with self._lock:
             return [point.copy() for point in self._points]
 
+    def get_fps(self) -> float:
+        with self._lock:
+            return self._scan_fps
+
     def get_status(self) -> dict:
         return {
             "running": self.running,
             "port": self.port,
             "baudrate": self.baudrate,
+            "scan_frequency_increase_hz": (
+                self.scan_frequency_increase_hz
+            ),
             "point_count": len(self.get_points()),
+            "fps": round(self.get_fps(), 1),
             "packet_count": self.packet_count,
             "checksum_errors": self.checksum_error_count,
             "last_error": self.last_error
@@ -353,8 +383,24 @@ class LidarReader:
                 )
 
                 if completed_scan:
+                    now = time.monotonic()
+
                     with self._lock:
                         self._points = completed_scan
+
+                        if self._last_scan_time is not None:
+                            interval = now - self._last_scan_time
+
+                            if interval > 0:
+                                current_fps = 1.0 / interval
+                                self._scan_fps = (
+                                    current_fps
+                                    if self._scan_fps == 0.0
+                                    else self._scan_fps * 0.8
+                                    + current_fps * 0.2
+                                )
+
+                        self._last_scan_time = now
 
             self._current_scan = []
 

@@ -5,6 +5,10 @@ import random
 from typing import Optional
 
 
+# 前壁として扱うために必要な検出線分の長さ（mm）。
+MIN_FRONT_WALL_LENGTH = 500.0
+
+
 def detect_walls(
     points: list[dict[str, float | int]],
     *,
@@ -12,8 +16,8 @@ def detect_walls(
     min_inliers: int = 10,
     min_wall_length: float = 100.0,
     max_point_gap: float = 250.0,
-    max_walls: int = 8,
-    iterations: int = 150,
+    max_walls: int = 4,
+    iterations: int = 100,
     maximum_distance: float = 3000.0
 ) -> list[dict]:
     """
@@ -112,30 +116,14 @@ def detect_walls(
             continue
 
         a, b, c = line
-        is_x_axis_wall = _is_aligned_with_x_axis(
-            start,
-            end,
-            maximum_angle=math.pi / 6
-        )
-        is_y_axis_wall = _is_aligned_with_y_axis(
-            start,
-            end,
-            maximum_angle=math.pi / 6
-        )
-        center_x = (start[0] + end[0]) / 2.0
-        center_y = (start[1] + end[1]) / 2.0
-        is_front_wall = is_x_axis_wall and center_y > 0.0
-        is_side_wall = is_y_axis_wall
-        wall_side = (
-            "right"
-            if is_side_wall and center_x > 0.0
-            else "left"
-            if is_side_wall and center_x < 0.0
-            else None
-        )
         # a, bは正規化済みなので、原点から壁直線への
         # 垂線距離は |a*0 + b*0 + c| = |c| になる。
         perpendicular_distance = abs(c)
+        closest_x = -a * c
+        closest_y = -b * c
+        normal_angle = math.degrees(
+            math.atan2(closest_y, closest_x)
+        ) % 360.0
         walls.append({
             "start": {
                 "x": round(start[0], 1),
@@ -147,21 +135,18 @@ def detect_walls(
             },
             "length": round(length, 1),
             "inlier_count": len(inliers),
-            "axis": (
-                "x"
-                if is_x_axis_wall
-                else "y"
-                if is_y_axis_wall
-                else None
-            ),
-            "is_front_wall": is_front_wall,
-            "is_side_wall": is_side_wall,
-            "side": wall_side,
-            "front_distance": (
-                round(perpendicular_distance, 1)
-                if is_front_wall
-                else None
-            ),
+            "closest_point": {
+                "x": round(closest_x, 1),
+                "y": round(closest_y, 1)
+            },
+            # ロボット右方向を0°、前を90°、左を180°とする。
+            "normal_angle": round(normal_angle, 1),
+            "role": None,
+            "is_front_wall": False,
+            "is_side_wall": False,
+            "side": None,
+            "front_distance": None,
+            "wall_distance": round(perpendicular_distance, 1),
             "line": {
                 "a": round(a, 6),
                 "b": round(b, 6),
@@ -173,6 +158,7 @@ def detect_walls(
         key=lambda wall: wall["inlier_count"],
         reverse=True
     )
+    _classify_walls_by_normal_angle(walls)
     return walls
 
 
@@ -181,7 +167,7 @@ def detect_front_wall(
     **wall_detection_options
 ) -> Optional[dict]:
     """
-    X軸方向でロボットより前にある壁のうち、最短の壁を返す。
+    垂線角度の並びから前壁と分類された壁のうち、最短を返す。
 
     front_distanceはロボット中心から壁直線へ下ろした垂線の長さ。
     前方壁が存在しない場合はNoneを返す。
@@ -205,15 +191,77 @@ def detect_front_wall(
     )
 
 
+def measure_front_distance(
+    points: list[dict[str, float | int]],
+    *,
+    half_angle: float = 15.0,
+    sample_count: int = 5,
+) -> Optional[float]:
+    """正面方向の点群から前方物体までの距離を直接測る。
+
+    RANSACの壁分類に依存せず、正面± ``half_angle`` 度にある点の
+    前方成分を使用する。単発ノイズで停止しないよう、近い方から
+    ``sample_count`` 点の中央値を返す。
+    """
+    if not 0.0 < half_angle < 90.0:
+        raise ValueError("half_angleは0より大きく90未満にしてください")
+    if sample_count < 1:
+        raise ValueError("sample_countは1以上にしてください")
+
+    front_distances = []
+
+    for point in points:
+        try:
+            angle = float(point["angle"]) % 360.0
+            distance = float(point["distance"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        signed_angle = (
+            angle if angle <= 180.0 else angle - 360.0
+        )
+
+        if (
+            not math.isfinite(distance)
+            or abs(signed_angle) > half_angle
+            or distance < 50.0
+        ):
+            continue
+
+        forward_distance = distance * math.cos(
+            math.radians(signed_angle)
+        )
+
+        if forward_distance > 0.0:
+            front_distances.append(forward_distance)
+
+    if len(front_distances) < sample_count:
+        return None
+
+    nearest = sorted(front_distances)[:sample_count]
+    middle = len(nearest) // 2
+
+    if len(nearest) % 2:
+        return round(nearest[middle], 1)
+
+    return round(
+        (nearest[middle - 1] + nearest[middle]) / 2.0,
+        1,
+    )
+
+
 def detect_side_walls(
     points: list[dict[str, float | int]],
+    *,
+    detected_walls: Optional[list[dict]] = None,
     **wall_detection_options
 ) -> dict[str, Optional[dict]]:
     """
     左右それぞれの最長壁と、追従対象にする壁を返す。
 
-    側壁はY軸方向の壁とし、壁中心のX座標で左右を決める。
-    LiDAR角度による視野の切り分けは行わない。
+    ロボット後方を0°とした壁垂線の角度が小さい順に、
+    右・前・左と分類する。
+    壁線のX/Y軸に対する角度制限は使用しない。
     """
 
     result: dict[str, Optional[dict]] = {
@@ -221,19 +269,17 @@ def detect_side_walls(
         "right": None,
         "trace": None
     }
-    detected_walls = detect_walls(
-        points,
-        **wall_detection_options
-    )
+    if detected_walls is None:
+        detected_walls = detect_walls(
+            points,
+            **wall_detection_options
+        )
 
     for side in ("left", "right"):
         walls = [
             wall
             for wall in detected_walls
-            if (
-                wall["is_side_wall"]
-                and wall["side"] == side
-            )
+            if wall["role"] == side
         ]
 
         if walls:
@@ -246,9 +292,7 @@ def detect_side_walls(
                 "side": side,
                 # lineは正規化済みなので、|c|がロボット中心から
                 # 壁へ下ろした垂線距離になる。
-                "wall_distance": abs(
-                    longest_wall["line"]["c"]
-                )
+                "wall_distance": longest_wall["wall_distance"]
             }
 
     candidates = [
@@ -266,27 +310,69 @@ def detect_side_walls(
     return result
 
 
+def detect_front_and_side_walls(
+    points: list[dict[str, float | int]],
+    *,
+    detected_walls: Optional[list[dict]] = None,
+    **wall_detection_options
+) -> tuple[Optional[dict], dict[str, Optional[dict]]]:
+    """同じ壁検出結果から、最短の前壁と左右の壁を返す。
+
+    前壁の距離は ``front_wall["front_distance"]``、左右壁の距離は
+    ``side_walls[side]["wall_distance"]`` で取得する。すべてロボット
+    中心から壁の直線へ下ろした垂線距離で、単位はmm。
+
+    ``detected_walls``を渡すとRANSACをやり直さないため、前壁と左右壁が
+    必ず同じフレーム・同じ壁検出結果から選ばれる。
+    """
+
+    if detected_walls is None:
+        detected_walls = detect_walls(
+            points,
+            **wall_detection_options
+        )
+
+    front_wall = min(
+        (
+            wall
+            for wall in detected_walls
+            if wall.get("is_front_wall")
+        ),
+        key=lambda wall: float(wall["front_distance"]),
+        default=None
+    )
+    side_walls = detect_side_walls(
+        points,
+        detected_walls=detected_walls
+    )
+    return front_wall, side_walls
+
+
 def detect_corners(
     walls: list[dict],
     *,
     endpoint_tolerance: float = 180.0
 ) -> list[dict]:
     """
-    X軸方向の壁とY軸方向の壁の交点を角として返す。
+    ほぼ直交して接続する任意方向の壁2本の交点を角として返す。
 
     ノイズで線分端が少し欠けても検出できるよう、交点が両線分の
     端からendpoint_tolerance以内にあれば同じ角とみなす。
     """
 
-    x_walls = [wall for wall in walls if wall.get("axis") == "x"]
-    y_walls = [wall for wall in walls if wall.get("axis") == "y"]
     corners = []
 
-    for front_wall in x_walls:
-        for side_wall in y_walls:
+    for first_index, first_wall in enumerate(walls):
+        for second_wall in walls[first_index + 1:]:
+            if not _walls_are_perpendicular(
+                first_wall,
+                second_wall
+            ):
+                continue
+
             intersection = _line_intersection(
-                front_wall["line"],
-                side_wall["line"]
+                first_wall["line"],
+                second_wall["line"]
             )
 
             if intersection is None:
@@ -295,12 +381,12 @@ def detect_corners(
             if not (
                 _point_is_near_segment(
                     intersection,
-                    front_wall,
+                    first_wall,
                     endpoint_tolerance
                 )
                 and _point_is_near_segment(
                     intersection,
-                    side_wall,
+                    second_wall,
                     endpoint_tolerance
                 )
             ):
@@ -311,11 +397,98 @@ def detect_corners(
                 "x": round(x, 1),
                 "y": round(y, 1),
                 "side": "right" if x > 0.0 else "left",
-                "front_wall": front_wall,
-                "side_wall": side_wall
+                "walls": [first_wall, second_wall]
             })
 
     return corners
+
+
+def _classify_walls_by_normal_angle(
+    walls: list[dict]
+) -> None:
+    """
+    ロボット後方を0°とした垂線角度の小さい順に、
+    右壁・前壁・左壁を割り当てる。
+
+    誤検出した短い線分に順位を奪われないよう、内点数の多い壁を
+    最大3本選んでから角度順に並べる。
+    """
+
+    candidates = sorted(
+        walls,
+        key=lambda wall: (
+            wall["inlier_count"],
+            wall["length"]
+        ),
+        reverse=True
+    )[:3]
+    candidates.sort(
+        key=lambda wall: (
+            float(wall["normal_angle"]) - 270.0
+        ) % 360.0
+    )
+
+    if len(candidates) == 3:
+        # normal_angleでは270°がロボット後方。ここを分類上の
+        # 0°として、右→前→左の順に割り当てる。
+        roles = ("right", "front", "left")
+    else:
+        target_angles = {
+            "right": 0.0,
+            "front": 90.0,
+            "left": 180.0
+        }
+        available_roles = set(target_angles)
+        roles = []
+
+        for wall in candidates:
+            role = min(
+                available_roles,
+                key=lambda name: _circular_angle_distance(
+                    wall["normal_angle"],
+                    target_angles[name]
+                )
+            )
+            roles.append(role)
+            available_roles.remove(role)
+
+    for wall, role in zip(candidates, roles):
+        wall["role"] = role
+        wall["is_front_wall"] = bool(
+            role == "front"
+            and wall["length"] >= MIN_FRONT_WALL_LENGTH
+        )
+        wall["is_side_wall"] = role in ("left", "right")
+        wall["side"] = (
+            role if role in ("left", "right") else None
+        )
+
+        if wall["is_front_wall"]:
+            wall["front_distance"] = wall["wall_distance"]
+
+
+def _circular_angle_distance(
+    first: float,
+    second: float
+) -> float:
+    difference = abs(first - second) % 360.0
+    return min(difference, 360.0 - difference)
+
+
+def _walls_are_perpendicular(
+    first: dict,
+    second: dict,
+    maximum_error: float = math.pi / 6
+) -> bool:
+    first_line = first["line"]
+    second_line = second["line"]
+    dot = abs(
+        first_line["a"] * second_line["a"]
+        + first_line["b"] * second_line["b"]
+    )
+    dot = max(0.0, min(1.0, dot))
+    angle = math.acos(dot)
+    return abs(angle - math.pi / 2) <= maximum_error
 
 
 def _line_intersection(

@@ -19,16 +19,31 @@ DEFAULT_SAMPLE_DIR = BASE_DIR / "samples"
 DEFAULT_RECORDING_DIR = BASE_DIR / "recordings"
 
 FRAME_SIZE = (480,270)# (320, 180)(640, 360)(960, 540)
-DEFAULT_IGNORE_BELOW_Y = FRAME_SIZE[1] * 2 // 3
+DEFAULT_IGNORE_BELOW_Y = None
 # main は処理用の軽い出力サイズ、raw は広い画角を保つためのセンサー読み出しサイズ。
 RAW_SENSOR_SIZE = (4608, 2592)
 RECORDING_FPS = 20.0
 MIN_AREA = 50
 KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+MAGENTA_MIN_AREA = 10
 PREVIEW_PORT = 8000
 GUIDE_COLOR = (0, 255, 255)
 GUIDE_THICKNESS = 1
 FPS_COLOR = (255, 255, 255)
+BLUE_LINE_COUNT_COLOR = (255, 180, 0)
+TARGET_LINE_THICKNESS = 3
+TARGET_LINE_CORNER_OFFSET_X = 50
+TARGET_LINE_COLORS = {
+    "red": (0, 0, 255),
+    "green": (0, 200, 0),
+}
+BLACK_WALL_PROBE_START = (100, 220)
+BLACK_WALL_PROBE_HALF_WIDTH = 3
+BLACK_WALL_VALUE_MAX = 70
+BLACK_WALL_MIN_RATIO = 0.15
+BLACK_WALL_PROBE_NORMAL_COLOR = (255, 255, 255)
+BLACK_WALL_PROBE_DETECTED_COLOR = (0, 255, 255)
+BLACK_WALL_PROBE_THICKNESS = 3
 GUIDE_CROSS_OFFSET_Y = 0
 GUIDE_TOP_LINE_Y = 60
 DETECTION_LIMIT_COLOR = (255, 0, 255)
@@ -43,6 +58,15 @@ BOUNDARY_FLOOR_VALUE_MIN = 45
 BOUNDARY_CONTRAST_MIN = 12.0
 BOUNDARY_SCAN_X_MARGIN_RATIO = 0.12
 BOUNDARY_SCAN_WINDOW = 10
+BLUE_LINE_COLOR = (255, 120, 0)
+BLUE_LINE_HUE_RANGE = (90, 130)
+BLUE_LINE_MIN_SATURATION = 70
+BLUE_LINE_MIN_VALUE = 65
+BLUE_LINE_MIN_AREA = 100
+BLUE_LINE_MIN_LENGTH_RATIO = 0.25
+BLUE_LINE_MIN_ELONGATION = 4.0
+BLUE_LINE_ROI_TOP_RATIO = 0.20
+BLUE_LINE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5))
 
 # ガイド枠はこの2つの数値を変えるだけで調整できます。
 # 左枠の左下頂点、右枠の右下頂点は必ず画面の角に固定されます。
@@ -53,7 +77,7 @@ COLOR_RULES = {
     "red": {
         "max_distance": 14.0,
         "distance_margin": 2.5,
-        "min_saturation": 30,
+        "min_saturation": 100,
         "min_value": 40,
         "value_weight": 0.6,
         "hue_ranges": ((0, 8), (170, 179)),
@@ -65,6 +89,15 @@ COLOR_RULES = {
         "min_value": 22,
         "value_weight": 0.45,
         "hue_margin": 6,
+    },
+    # RGB (255, 0, 255) は OpenCV の HSV では H=150 になる。
+    # カメラの色ずれも吸収できるよう、前後に余裕を持たせて検出する。
+    "magenta": {
+        # 黒い壁に映る暗い反射を除外しつつ、遠方の実物は小面積でも残す。
+        "min_saturation": 90,
+        "min_value": 60,
+        "hue_ranges": ((138, 162),),
+        "kernel_size": 3,
     },
 }
 
@@ -150,8 +183,14 @@ def create_mask(hsv, color_name, color_model, other_models):
         range_mask = cv2.inRange(hsv, lower, upper)
         mask = range_mask if mask is None else cv2.bitwise_or(mask, range_mask)
 
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, KERNEL)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, KERNEL)
+    kernel_size = rule.get("kernel_size")
+    kernel = (
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        if kernel_size is not None
+        else KERNEL
+    )
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     return mask
 
 
@@ -185,6 +224,7 @@ def find_objects(mask, min_area=MIN_AREA, min_height=1):
         objects.append(
             {
                 "bbox": (x, y, w, h),
+                "contour": [tuple(map(int, point[0])) for point in contour],
                 "center": (cx, cy),
                 "area": int(area),
                 "extent": round(extent, 2),
@@ -195,14 +235,18 @@ def find_objects(mask, min_area=MIN_AREA, min_height=1):
     return sorted(objects, key=lambda item: item["area"], reverse=True)
 
 
-def draw_objects(frame, color_name, detections, bgr):
+def draw_objects(frame, color_name, detections, bgr, draw_contour=False):
     for obj in detections:
         x, y, w, h = obj["bbox"]
         cx, cy = obj["center"]
         area = obj["area"]
         extent = obj["extent"]
 
-        cv2.rectangle(frame, (x, y), (x + w, y + h), bgr, 2)
+        if draw_contour:
+            points = np.array(obj["contour"], dtype=np.int32).reshape((-1, 1, 2))
+            cv2.drawContours(frame, [points], -1, bgr, 2, cv2.LINE_AA)
+        else:
+            cv2.rectangle(frame, (x, y), (x + w, y + h), bgr, 2)
         cv2.circle(frame, (cx, cy), 5, bgr, -1)
         cv2.putText(
             frame,
@@ -419,6 +463,231 @@ def draw_fps(frame, fps):
     )
 
 
+def draw_blue_line_crossing_count(frame, count):
+    cv2.putText(
+        frame,
+        f"BLUE PASSED: {count}",
+        (10, 50),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.72,
+        BLUE_LINE_COUNT_COLOR,
+        2,
+        cv2.LINE_AA,
+    )
+
+
+def detect_blue_line(frame):
+    """床の青いテープを検出し、中心、端点、角度を返す。"""
+    frame_h, frame_w = frame.shape[:2]
+    roi_top = int(frame_h * BLUE_LINE_ROI_TOP_RATIO)
+    hsv = cv2.cvtColor(frame[roi_top:, :], cv2.COLOR_BGR2HSV)
+    lower = np.array(
+        [BLUE_LINE_HUE_RANGE[0], BLUE_LINE_MIN_SATURATION, BLUE_LINE_MIN_VALUE],
+        dtype=np.uint8,
+    )
+    upper = np.array([BLUE_LINE_HUE_RANGE[1], 255, 255], dtype=np.uint8)
+    mask = cv2.inRange(hsv, lower, upper)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, BLUE_LINE_KERNEL)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, BLUE_LINE_KERNEL)
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates = []
+    min_line_length = frame_w * BLUE_LINE_MIN_LENGTH_RATIO
+    for contour in contours:
+        area = float(cv2.contourArea(contour))
+        if area < BLUE_LINE_MIN_AREA:
+            continue
+
+        (_, _), (rect_w, rect_h), _ = cv2.minAreaRect(contour)
+        long_side = max(rect_w, rect_h)
+        short_side = max(min(rect_w, rect_h), 1.0)
+        elongation = long_side / short_side
+        if long_side < min_line_length or elongation < BLUE_LINE_MIN_ELONGATION:
+            continue
+        candidates.append((area * elongation, contour, area, elongation))
+
+    if not candidates:
+        return None, mask
+
+    _, contour, area, elongation = max(candidates, key=lambda item: item[0])
+    points = contour.reshape(-1, 2).astype(np.float32)
+    points[:, 1] += roi_top
+    vx, vy, x0, y0 = [float(value) for value in cv2.fitLine(
+        points.reshape(-1, 1, 2),
+        cv2.DIST_L2,
+        0,
+        0.01,
+        0.01,
+    ).reshape(-1)]
+
+    projections = (points[:, 0] - x0) * vx + (points[:, 1] - y0) * vy
+    start = (x0 + float(projections.min()) * vx, y0 + float(projections.min()) * vy)
+    end = (x0 + float(projections.max()) * vx, y0 + float(projections.max()) * vy)
+    start = (
+        int(np.clip(round(start[0]), 0, frame_w - 1)),
+        int(np.clip(round(start[1]), 0, frame_h - 1)),
+    )
+    end = (
+        int(np.clip(round(end[0]), 0, frame_w - 1)),
+        int(np.clip(round(end[1]), 0, frame_h - 1)),
+    )
+    center = (
+        int(np.clip(round(x0), 0, frame_w - 1)),
+        int(np.clip(round(y0), 0, frame_h - 1)),
+    )
+    angle_deg = float(np.degrees(np.arctan2(vy, vx)))
+    if angle_deg < -90.0:
+        angle_deg += 180.0
+    elif angle_deg > 90.0:
+        angle_deg -= 180.0
+
+    return {
+        "center": center,
+        "line": (*start, *end),
+        "angle_deg": round(angle_deg, 1),
+        "area": int(area),
+        "elongation": round(float(elongation), 1),
+    }, mask
+
+
+def draw_blue_line(frame, blue_line):
+    if blue_line is None:
+        return
+
+    x1, y1, x2, y2 = blue_line["line"]
+    cx, cy = blue_line["center"]
+    cv2.line(frame, (x1, y1), (x2, y2), BLUE_LINE_COLOR, 4, cv2.LINE_AA)
+    cv2.circle(frame, (cx, cy), 6, BLUE_LINE_COLOR, -1)
+    cv2.putText(
+        frame,
+        f"BLUE LINE angle={blue_line['angle_deg']:.1f} y={cy}",
+        (10, 76),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.58,
+        BLUE_LINE_COLOR,
+        2,
+        cv2.LINE_AA,
+    )
+
+
+def format_blue_line(blue_line):
+    if blue_line is None:
+        return "BLUE LINE: not found"
+    return (
+        f"BLUE LINE: center={blue_line['center']} "
+        f"angle={blue_line['angle_deg']:.1f} area={blue_line['area']}"
+    )
+
+
+def build_primary_target_line(primary, frame):
+    """
+    一番手前の物体から画面下端へ引く線の終点と角度を返す。
+    角度は垂直を0度、右傾きを負、左傾きを正として±90度で表す。
+    """
+    if primary is None:
+        return None
+
+    color_name, obj = primary
+    frame_height, frame_width = frame.shape[:2]
+    corner_offset_x = min(TARGET_LINE_CORNER_OFFSET_X, frame_width - 1)
+    destination = (
+        (frame_width - 1 - corner_offset_x, frame_height - 1)
+        if color_name == "green"
+        else (corner_offset_x, frame_height - 1)
+    )
+    center_x, center_y = obj["center"]
+    angle_deg = float(
+        np.degrees(
+            np.arctan2(
+                center_x - destination[0],
+                abs(destination[1] - center_y),
+            )
+        )
+    )
+    return {
+        "color": color_name,
+        "start": obj["center"],
+        "end": destination,
+        "angle_deg": angle_deg,
+    }
+
+
+def draw_primary_target_line(frame, target_line):
+    if target_line is None:
+        return
+
+    color = TARGET_LINE_COLORS[target_line["color"]]
+    cv2.line(
+        frame,
+        target_line["start"],
+        target_line["end"],
+        color,
+        TARGET_LINE_THICKNESS,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        f"LINE {target_line['color'].upper()} angle={target_line['angle_deg']:.1f} deg",
+        (10, 102),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        color,
+        2,
+        cv2.LINE_AA,
+    )
+
+
+def get_black_wall_probe_start(frame_width, direction=1):
+    """direction=1は現在位置、0は画面中央を基準に左右反転した位置を返す。"""
+    probe_x, probe_y = BLACK_WALL_PROBE_START
+    if direction == 0:
+        probe_x = frame_width - 1 - probe_x
+    return probe_x, probe_y
+
+
+def measure_black_wall_ratio(frame, probe_start=None):
+    """固定検査線の周囲を黒い画素が占める割合を0.0〜1.0で返す。"""
+    frame_height, frame_width = frame.shape[:2]
+    probe_x, probe_y = probe_start or BLACK_WALL_PROBE_START
+    if not (0 <= probe_x < frame_width and 0 <= probe_y < frame_height):
+        return 0.0
+
+    left = max(0, probe_x - BLACK_WALL_PROBE_HALF_WIDTH)
+    right = min(frame_width, probe_x + BLACK_WALL_PROBE_HALF_WIDTH + 1)
+    roi = frame[probe_y:frame_height, left:right]
+    if roi.size == 0:
+        return 0.0
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    return float(np.mean(hsv[:, :, 2] <= BLACK_WALL_VALUE_MAX))
+
+
+def detect_black_wall_on_probe(frame, probe_start=None):
+    """固定検査線の周囲を黒い画素が一定割合以上占めるか判定する。"""
+    return measure_black_wall_ratio(frame, probe_start) >= BLACK_WALL_MIN_RATIO
+
+
+def draw_black_wall_probe(frame, black_wall_detected, probe_start=None):
+    frame_height, frame_width = frame.shape[:2]
+    probe_x, probe_y = probe_start or BLACK_WALL_PROBE_START
+    if not (0 <= probe_x < frame_width and 0 <= probe_y < frame_height):
+        return
+
+    color = (
+        BLACK_WALL_PROBE_DETECTED_COLOR
+        if black_wall_detected
+        else BLACK_WALL_PROBE_NORMAL_COLOR
+    )
+    cv2.line(
+        frame,
+        (probe_x, probe_y),
+        (probe_x, frame_height - 1),
+        color,
+        BLACK_WALL_PROBE_THICKNESS,
+        cv2.LINE_AA,
+    )
+
+
 def format_detection(color_name, detections):
     if not detections:
         return f"{color_name}: not found"
@@ -486,6 +755,8 @@ class PiColorDetector:
         self._last_seen_result_id = 0
         self._last_fps_time = None
         self._fps = 0.0
+        self.blue_line_crossing_count = 0
+        self.black_wall_probe_direction = 1
         # 画面の下1/3は物体検出の対象外にする。
         self.ignore_below_y = DEFAULT_IGNORE_BELOW_Y
 
@@ -572,6 +843,14 @@ class PiColorDetector:
     def set_ignore_below_y(self, y):
         self.ignore_below_y = y
 
+    def set_black_wall_probe_direction(self, direction):
+        if direction not in (0, 1):
+            raise ValueError("black wall probe direction は0または1にしてください。")
+        self.black_wall_probe_direction = direction
+
+    def set_blue_line_crossing_count(self, count):
+        self.blue_line_crossing_count = max(0, int(count))
+
     def _record_loop(self):
         frame_interval = 1.0 / self.recording_fps if self.recording_fps > 0 else 0
         while self._capture_running:
@@ -611,48 +890,88 @@ class PiColorDetector:
         frame = self.camera.capture_array()
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         frame = cv2.GaussianBlur(frame, (5, 5), 0)
+        blue_line, blue_line_mask = detect_blue_line(frame)
         if self.detect_objects_enabled:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             red_mask = create_mask(hsv, "red", self.models["red"], [self.models["green"], self.models["other"]])
             green_mask = create_mask(hsv, "green", self.models["green"], [self.models["red"], self.models["other"]])
+            magenta_mask = create_mask(hsv, "magenta", None, [])
             red_mask[:GUIDE_TOP_LINE_Y, :] = 0
             green_mask[:GUIDE_TOP_LINE_Y, :] = 0
+            magenta_mask[:GUIDE_TOP_LINE_Y, :] = 0
             # if self.ignore_below_y is not None:
             #     limit_y = max(0, min(int(self.ignore_below_y), frame.shape[0]))
             #     red_mask[limit_y:, :] = 0
             #     green_mask[limit_y:, :] = 0
             red_objects = find_objects(red_mask)
             green_objects = find_objects(green_mask)
+            magenta_objects = find_objects(magenta_mask, min_area=MAGENTA_MIN_AREA)
         else:
             red_objects = []
             green_objects = []
+            magenta_objects = []
         boundary = detect_wall_floor_boundary(frame) if self.detect_boundary_enabled else None
+        # マゼンタは表示専用。走行用ターゲット線の対象にはしない。
+        primary = choose_primary_detection(red_objects, green_objects)
+        target_line = build_primary_target_line(primary, frame)
+        black_wall_probe_start = get_black_wall_probe_start(
+            frame.shape[1],
+            self.black_wall_probe_direction,
+        )
+        black_wall_ratio = measure_black_wall_ratio(frame, black_wall_probe_start)
+        black_wall_on_probe = black_wall_ratio >= BLACK_WALL_MIN_RATIO
 
         if self.enable_preview or self.enable_recording:
             annotated_frame = frame.copy()
             draw_fps(annotated_frame, self._fps)
-            draw_guide_boxes(annotated_frame, self.ignore_below_y)
+            draw_blue_line_crossing_count(
+                annotated_frame,
+                self.blue_line_crossing_count,
+            )
             draw_boundary(annotated_frame, boundary)
+            draw_blue_line(annotated_frame, blue_line)
             draw_objects(annotated_frame, "RED", red_objects, (0, 0, 255))
             draw_objects(annotated_frame, "GREEN", green_objects, (0, 200, 0))
+            draw_objects(
+                annotated_frame,
+                "MAGENTA",
+                magenta_objects,
+                (255, 0, 255),
+                draw_contour=True,
+            )
+            draw_primary_target_line(annotated_frame, target_line)
+            draw_black_wall_probe(
+                annotated_frame,
+                black_wall_on_probe,
+                black_wall_probe_start,
+            )
         else:
             annotated_frame = frame
 
         red_status = format_detection("RED", red_objects) if self.detect_objects_enabled else "RED: disabled"
         green_status = format_detection("GREEN", green_objects) if self.detect_objects_enabled else "GREEN: disabled"
+        magenta_status = format_detection("MAGENTA", magenta_objects) if self.detect_objects_enabled else "MAGENTA: disabled"
         boundary_status = format_boundary(boundary) if self.detect_boundary_enabled else "boundary: disabled"
-        primary = choose_primary_detection(red_objects, green_objects)
 
         return {
             "frame": frame,
             "annotated_frame": annotated_frame,
             "red_objects": red_objects,
             "green_objects": green_objects,
+            "magenta_objects": magenta_objects,
             "boundary": boundary,
             "red_status": red_status,
             "green_status": green_status,
+            "magenta_status": magenta_status,
             "boundary_status": boundary_status,
+            "blue_line": blue_line,
+            "blue_line_mask": blue_line_mask,
+            "blue_line_status": format_blue_line(blue_line),
             "primary_detection": primary,
+            "line_angle_deg": target_line["angle_deg"] if target_line is not None else None,
+            "black_wall_on_probe": black_wall_on_probe,
+            "black_wall_ratio": black_wall_ratio,
+            "black_wall_probe_start": black_wall_probe_start,
             "fps": self._fps,
         }
 
@@ -680,6 +999,8 @@ class PiColorDetector:
             f"FPS: {result.get('fps', 0.0):.1f}",
             result["red_status"],
             result["green_status"],
+            result["magenta_status"],
+            result["blue_line_status"],
             result["boundary_status"],
         ]
         if extra_lines:

@@ -322,7 +322,7 @@ def get_angle(axis: str) -> float:
       print(get_angle("z"))
     """
 
-    return get_reader().get_angle(axis)
+    return get_reader().get_angle(axis) * -1
 
 
 def reset_angle(axis: str | None = None) -> None:

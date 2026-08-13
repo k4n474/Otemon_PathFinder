@@ -52,6 +52,48 @@
             color: white;
         }
 
+        #turnStatus {
+            width: min(760px, 94vw);
+            margin: 0 auto 12px;
+            padding: 12px;
+            border: 2px solid #475569;
+            border-radius: 8px;
+            background: #1e293b;
+            color: #cbd5e1;
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        #turnStatus.active {
+            border-color: #f59e0b;
+            background: #78350f;
+            color: white;
+        }
+
+        #parkStatus {
+            width: min(760px, 94vw);
+            margin: 0 auto 12px;
+            padding: 12px;
+            border: 2px solid #475569;
+            border-radius: 8px;
+            background: #1e293b;
+            color: #cbd5e1;
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        #parkStatus.detected {
+            border-color: #22c55e;
+            background: #14532d;
+            color: white;
+        }
+
+        #parkStatus.candidate {
+            border-color: #f59e0b;
+            background: #78350f;
+            color: white;
+        }
+
         #sideWalls {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -106,6 +148,14 @@
         前方の壁: 未検出
     </div>
 
+    <div id="turnStatus">
+        旋回: 待機中
+    </div>
+
+    <div id="parkStatus">
+        前壁垂直制御: 状態待ち
+    </div>
+
     <div id="sideWalls">
         <div id="leftWall" class="side-wall">
             <strong>左壁</strong>
@@ -126,13 +176,17 @@
     <script>
         // Live ServerがRaspberry Pi以外で動く場合は、
         // ?apiHost=192.168.x.x のようにLiDAR側のIPを指定する。
-        const apiHost =
-            new URLSearchParams(location.search).get("apiHost")
-            || location.hostname
-            || "localhost";
+        const requestedApiHost =
+            new URLSearchParams(location.search).get("apiHost");
+
+        const apiBaseUrl = requestedApiHost
+            ? `http://${requestedApiHost}:5000`
+            : location.port === "5000"
+            ? location.origin
+            : `${location.protocol}//${location.hostname || "localhost"}:5000`;
 
         const API_URL =
-            `http://${apiHost}:5000/api/points`;
+            `${apiBaseUrl}/api/points`;
 
         const canvas =
             document.getElementById("lidarCanvas");
@@ -145,6 +199,12 @@
 
         const frontWallAlert =
             document.getElementById("frontWallAlert");
+
+        const turnStatus =
+            document.getElementById("turnStatus");
+
+        const parkStatus =
+            document.getElementById("parkStatus");
 
         const leftWallElement =
             document.getElementById("leftWall");
@@ -208,15 +268,34 @@
                     Array.isArray(data.walls)
                     ? data.walls
                     : [];
+                const corners =
+                    Array.isArray(data.corners)
+                    ? data.corners
+                    : [];
+                const guideLines =
+                    Array.isArray(data.guide_lines)
+                    ? data.guide_lines
+                    : [];
 
-                draw(data.points, walls);
+                draw(
+                    data.points,
+                    walls,
+                    corners,
+                    guideLines,
+                    data.obstacle_point
+                );
                 updateFrontWallAlert(data.front_wall);
+                updateTurnStatus(data.turn);
+                updateParkStatus(data.front_alignment);
                 updateSideWalls(data.side_walls);
 
                 statusElement.textContent =
                     `取得点数: ${data.count}`
+                    + formatFpsStatus(data.fps)
                     + ` / 検出壁数: ${walls.length}`
-                    + ` / API: ${apiHost}:5000`;
+                    + formatWallLengthStatus(data)
+                    + formatAvoidanceStatus(data)
+                    + ` / API: ${apiBaseUrl}`;
 
             } catch (error) {
                 console.error(error);
@@ -226,12 +305,61 @@
                 frontWallAlert.textContent =
                     "前方の壁: 判定できません";
                 frontWallAlert.classList.remove("detected");
+                turnStatus.textContent =
+                    "旋回: 状態を取得できません";
+                turnStatus.classList.remove("active");
+                parkStatus.textContent =
+                    "前壁垂直制御: 状態を取得できません";
+                parkStatus.classList.remove("detected", "candidate");
                 updateSideWalls(null);
 
             } finally {
                 requesting = false;
             }
         }
+
+        function formatFpsStatus(fpsValue) {
+            const fps = Number(fpsValue);
+
+            if (!Number.isFinite(fps)) {
+                return " / FPS: --";
+            }
+
+            return ` / FPS: ${fps.toFixed(1)}`;
+        }
+
+        function formatWallLengthStatus(data) {
+            const shortLength =
+                Number(data.short_wall?.length);
+            const longLength =
+                Number(data.long_wall?.length);
+
+            if (
+                !Number.isFinite(shortLength)
+                || !Number.isFinite(longLength)
+            ) {
+                return "";
+            }
+
+            return ` / 短い壁: ${Math.round(shortLength)} mm`
+                + ` / 長い壁: ${Math.round(longLength)} mm`;
+        }
+
+
+        function formatAvoidanceStatus(data) {
+            if (!data.avoidance_active) {
+                return " / 回避: OFF";
+            }
+
+            const direction =
+                data.avoidance_direction === "right"
+                ? "右"
+                : "左";
+            const pointX =
+                Math.round(Number(data.obstacle_point?.x));
+            return ` / 回避: ${direction} (P.x=${pointX} mm)`;
+        }
+
 
         function updateFrontWallAlert(frontWall) {
             const distance =
@@ -247,6 +375,136 @@
             frontWallAlert.textContent =
                 "前方の壁: 未検出";
             frontWallAlert.classList.remove("detected");
+        }
+
+        function updateTurnStatus(turn) {
+            const targetAngle =
+                Number(turn?.target_angle);
+            const turnedAngle =
+                Number(turn?.turned_angle);
+
+            if (
+                !turn
+                || !Number.isFinite(targetAngle)
+                || !Number.isFinite(turnedAngle)
+            ) {
+                turnStatus.textContent =
+                    "旋回: 待機中";
+                turnStatus.classList.remove("active");
+                return;
+            }
+
+            const direction =
+                turn.direction === "left" ? "左" : "右";
+            const stateLabels = {
+                planned: "旋回予定",
+                turning: "旋回中",
+                completed: "旋回完了"
+            };
+            const state =
+                stateLabels[turn.status]
+                ?? (turn.active ? "旋回中" : "旋回完了");
+
+            turnStatus.textContent =
+                `${state}: ${direction}`
+                + ` / 現在 ${turnedAngle.toFixed(1)}°`
+                + ` / 目標 ${targetAngle.toFixed(1)}°`;
+            turnStatus.classList.toggle(
+                "active",
+                Boolean(turn.active)
+            );
+        }
+
+        function updateParkStatus(alignment) {
+            if (!alignment) {
+                parkStatus.textContent =
+                    "前壁垂直制御: park.pyから状態を取得してください";
+                parkStatus.classList.remove("detected", "candidate");
+                return;
+            }
+
+            const gyroMotionStates = [
+                "turning_left", "turn_complete", "turn_error",
+                "driving_straight", "final_complete"
+            ];
+            if (
+                !alignment.active
+                && !gyroMotionStates.includes(alignment.motion_state)
+            ) {
+                parkStatus.textContent =
+                    "前壁垂直制御: 前壁を探索中";
+                parkStatus.classList.remove("detected", "candidate");
+                return;
+            }
+
+            const error = Number(alignment.angle_error);
+            const steering = Number(alignment.commanded_steering_angle);
+            const distance = Number(alignment.front_distance);
+            const distanceText = Number.isFinite(distance)
+                ? ` / 前壁 ${Math.round(distance)} mm`
+                : "";
+            const speed = Number(alignment.drive_speed);
+            const speedText = Number.isFinite(speed)
+                ? ` / 速度 ${speed.toFixed(0)}`
+                : "";
+            if (alignment.arrived) {
+                const yaw = Number(alignment.gyro_yaw);
+                const gyroText = alignment.gyro_ready
+                    ? ` / ジャイロ使用可能・Yaw ${yaw.toFixed(1)}°`
+                    : alignment.gyro_error
+                    ? ` / ジャイロエラー: ${alignment.gyro_error}`
+                    : " / ジャイロ初期化中";
+                parkStatus.textContent =
+                    alignment.motion_state === "final_complete"
+                    ? `✓ 90°を維持して直進完了・前壁1,000 mmで停止${distanceText}${gyroText}`
+                    : `旋回停止${gyroText}`;
+                parkStatus.classList.add("detected");
+                parkStatus.classList.remove("candidate");
+                return;
+            }
+
+            if (alignment.motion_state === "braking") {
+                parkStatus.textContent =
+                    `100 mm以内・ブレーキ中${distanceText}`;
+                parkStatus.classList.add("candidate");
+                parkStatus.classList.remove("detected");
+                return;
+            }
+
+            if (alignment.motion_state === "turning_left") {
+                const yaw = Number(alignment.gyro_yaw);
+                parkStatus.textContent =
+                    `ジャイロで左旋回中 / ${Math.abs(yaw).toFixed(1)}° / 目標 90.0° / サーボ -40.0°${speedText}`;
+                parkStatus.classList.add("candidate");
+                parkStatus.classList.remove("detected");
+                return;
+            }
+
+            if (alignment.motion_state === "driving_straight") {
+                const yaw = Number(alignment.gyro_yaw);
+                const targetYaw = Number(alignment.straight_target_yaw);
+                parkStatus.textContent =
+                    `90°維持で直進中${distanceText}${speedText} / Yaw ${yaw.toFixed(1)}° / 目標 ${targetYaw.toFixed(1)}° / サーボ ${steering.toFixed(1)}°`;
+                parkStatus.classList.add("candidate");
+                parkStatus.classList.remove("detected");
+                return;
+            }
+
+            const movingLabel = alignment.motion_state === "reversing"
+                ? "後退"
+                : "前進";
+
+            if (alignment.aligned) {
+                parkStatus.textContent =
+                    `${movingLabel}中・前壁に垂直${distanceText}${speedText} / サーボ ${steering.toFixed(1)}°`;
+                parkStatus.classList.add("detected");
+                parkStatus.classList.remove("candidate");
+            } else {
+                parkStatus.textContent =
+                    `${movingLabel}・姿勢補正中${distanceText}${speedText} / 誤差 ${error.toFixed(1)}° / サーボ ${steering.toFixed(1)}°`;
+                parkStatus.classList.add("candidate");
+                parkStatus.classList.remove("detected");
+            }
         }
 
         function updateSideWalls(sideWalls) {
@@ -314,7 +572,13 @@
         }
 
 
-        function draw(points, walls) {
+        function draw(
+            points,
+            walls,
+            corners,
+            guideLines,
+            obstaclePoint
+        ) {
             ctx.clearRect(
                 0,
                 0,
@@ -323,6 +587,7 @@
             );
 
             drawGrid();
+            drawGuideLines(guideLines);
 
             ctx.fillStyle = "#00ff88";
 
@@ -377,7 +642,81 @@
             }
 
             drawWalls(walls);
+            drawWallNormals(walls);
+            drawCorners(corners);
+            drawObstaclePoint(obstaclePoint);
             drawRobot();
+        }
+
+
+        function drawObstaclePoint(point) {
+            const x = Number(point?.x);
+            const y = Number(point?.y);
+
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                return;
+            }
+
+            const canvasX = centerX + x * scale;
+            const canvasY = centerY - y * scale;
+            ctx.save();
+            ctx.fillStyle = "#2563eb";
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(canvasX, canvasY, 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "bold 13px Arial";
+            ctx.fillText(
+                `P (${Math.round(x)}, ${Math.round(y)})`,
+                canvasX + 12,
+                canvasY - 10
+            );
+            ctx.restore();
+        }
+
+
+        function drawGuideLines(guideLines) {
+            ctx.save();
+            ctx.strokeStyle = "#64748b";
+            ctx.fillStyle = "#94a3b8";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([10, 6]);
+            ctx.font = "bold 12px Arial";
+
+            for (const line of guideLines) {
+                const values = [
+                    line?.start?.x,
+                    line?.start?.y,
+                    line?.end?.x,
+                    line?.end?.y
+                ].map(Number);
+
+                if (!values.every(Number.isFinite)) {
+                    continue;
+                }
+
+                const [startX, startY, endX, endY] = values;
+                ctx.beginPath();
+                ctx.moveTo(
+                    centerX + startX * scale,
+                    centerY - startY * scale
+                );
+                ctx.lineTo(
+                    centerX + endX * scale,
+                    centerY - endY * scale
+                );
+                ctx.stroke();
+                ctx.fillText(
+                    `x=${Number(line.x)} mm`,
+                    centerX + startX * scale + 5,
+                    18
+                );
+            }
+
+            ctx.restore();
         }
 
 
@@ -405,11 +744,27 @@
                     values;
 
                 ctx.strokeStyle =
-                    wall.is_front_wall
+                    wall.is_park_wall
+                    ? "#22c55e"
+                    : wall.is_perpendicular_to_front
+                    ? "#f97316"
+                    : wall.length_type === "short"
+                    ? "#facc15"
+                    : wall.length_type === "long"
+                    ? "#22c55e"
+                    : wall.length_type === "short_and_long"
+                    ? "#ffffff"
+                    : wall.role === "right"
+                    ? "#38bdf8"
+                    : wall.role === "front"
                     ? "#ff3b30"
+                    : wall.role === "left"
+                    ? "#a78bfa"
                     : "#ffcc00";
                 ctx.lineWidth =
-                    wall.is_front_wall
+                    wall.is_park_wall
+                    ? 10
+                    : wall.is_front_wall
                     ? 8
                     : 5;
 
@@ -426,6 +781,90 @@
             }
 
             ctx.lineCap = "butt";
+        }
+
+
+        function drawWallNormals(walls) {
+            const labels = {
+                right: "右",
+                front: "前",
+                left: "左"
+            };
+
+            ctx.save();
+            ctx.setLineDash([8, 6]);
+            ctx.lineWidth = 2;
+            ctx.font = "bold 13px Arial";
+
+            for (const wall of walls) {
+                if (
+                    !wall.role
+                    || !wall.closest_point
+                ) {
+                    continue;
+                }
+
+                const x = Number(wall.closest_point.x);
+                const y = Number(wall.closest_point.y);
+                const angle = Number(wall.normal_angle);
+
+                if (
+                    !Number.isFinite(x)
+                    || !Number.isFinite(y)
+                    || !Number.isFinite(angle)
+                ) {
+                    continue;
+                }
+
+                const colors = {
+                    right: "#38bdf8",
+                    front: "#ff3b30",
+                    left: "#a78bfa"
+                };
+                const endX = centerX + x * scale;
+                const endY = centerY - y * scale;
+
+                ctx.strokeStyle = colors[wall.role];
+                ctx.fillStyle = colors[wall.role];
+                ctx.beginPath();
+                ctx.moveTo(centerX, centerY);
+                ctx.lineTo(endX, endY);
+                ctx.stroke();
+                ctx.fillText(
+                    `${labels[wall.role]} ${angle.toFixed(1)}°`,
+                    endX + 6,
+                    endY - 6
+                );
+            }
+
+            ctx.restore();
+        }
+
+
+        function drawCorners(corners) {
+            ctx.fillStyle = "#ffffff";
+
+            for (const corner of corners) {
+                const x = Number(corner.x);
+                const y = Number(corner.y);
+
+                if (
+                    !Number.isFinite(x)
+                    || !Number.isFinite(y)
+                ) {
+                    continue;
+                }
+
+                ctx.beginPath();
+                ctx.arc(
+                    centerX + x * scale,
+                    centerY - y * scale,
+                    7,
+                    0,
+                    Math.PI * 2
+                );
+                ctx.fill();
+            }
         }
 
 

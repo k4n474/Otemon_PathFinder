@@ -30,12 +30,19 @@ def set_angle(angle):
     elif angle < -50 + dif:
         angle = -50 + dif
     angle = angle / 71.4
+    if angle > 0:
+        angle = angle * 1.4
     servo.value = angle
 
 
 def stop():
     motor_in1.value = 0
     motor_in2.value = 0
+
+def brake():
+    """DRV8871の両入力をHighにして電気ブレーキをかける。"""
+    motor_in1.value = 1
+    motor_in2.value = 1
 
 def cleanup():
     motor_in1.close()

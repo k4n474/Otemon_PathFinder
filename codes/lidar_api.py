@@ -1,6 +1,6 @@
 import atexit
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 
 from algorithm import detect_corners, detect_side_walls, detect_walls
@@ -13,7 +13,8 @@ CORS(app)
 
 lidar = LidarReader(
     port="/dev/serial0",
-    baudrate=230400
+    baudrate=230400,
+    scan_frequency_increase_hz=6
 )
 
 
@@ -26,11 +27,10 @@ except Exception as error:
 
 @app.get("/")
 def home():
-    return jsonify({
-        "message": "LiDAR API is running",
-        "points_url": "/api/points",
-        "status_url": "/api/status"
-    })
+    return send_from_directory(
+        app.root_path,
+        "index.html"
+    )
 
 
 @app.get("/api/points")
@@ -52,6 +52,7 @@ def api_points():
 
     return jsonify({
         "count": len(points),
+        "fps": round(lidar.get_fps(), 1),
         "points": points,
         "wall_count": len(walls),
         "walls": walls,
