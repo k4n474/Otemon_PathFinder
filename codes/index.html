@@ -52,6 +52,30 @@
             color: white;
         }
 
+        #gyroStatus {
+            width: min(760px, 94vw);
+            margin: 0 auto 12px;
+            padding: 12px;
+            border: 2px solid #475569;
+            border-radius: 8px;
+            background: #1e293b;
+            color: #cbd5e1;
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        #gyroStatus.ready {
+            border-color: #22d3ee;
+            background: #164e63;
+            color: white;
+        }
+
+        #gyroStatus.error {
+            border-color: #ef4444;
+            background: #7f1d1d;
+            color: white;
+        }
+
         #turnStatus {
             width: min(760px, 94vw);
             margin: 0 auto 12px;
@@ -148,6 +172,10 @@
         前方の壁: 未検出
     </div>
 
+    <div id="gyroStatus">
+        ジャイロ: 状態待ち
+    </div>
+
     <div id="turnStatus">
         旋回: 待機中
     </div>
@@ -199,6 +227,9 @@
 
         const frontWallAlert =
             document.getElementById("frontWallAlert");
+
+        const gyroStatus =
+            document.getElementById("gyroStatus");
 
         const turnStatus =
             document.getElementById("turnStatus");
@@ -285,6 +316,7 @@
                     data.obstacle_point
                 );
                 updateFrontWallAlert(data.front_wall);
+                updateGyroStatus(data.gyro);
                 updateTurnStatus(data.turn);
                 updateParkStatus(data.front_alignment);
                 updateSideWalls(data.side_walls);
@@ -305,6 +337,7 @@
                 frontWallAlert.textContent =
                     "前方の壁: 判定できません";
                 frontWallAlert.classList.remove("detected");
+                updateGyroStatus(null);
                 turnStatus.textContent =
                     "旋回: 状態を取得できません";
                 turnStatus.classList.remove("active");
@@ -316,6 +349,25 @@
             } finally {
                 requesting = false;
             }
+        }
+
+        function updateGyroStatus(gyro) {
+            gyroStatus.classList.remove("ready", "error");
+
+            if (gyro?.ready && Number.isFinite(Number(gyro.yaw))) {
+                gyroStatus.textContent =
+                    `ジャイロ Yaw: ${Number(gyro.yaw).toFixed(1)}°`;
+                gyroStatus.classList.add("ready");
+                return;
+            }
+
+            if (gyro?.error) {
+                gyroStatus.textContent = `ジャイロエラー: ${gyro.error}`;
+                gyroStatus.classList.add("error");
+                return;
+            }
+
+            gyroStatus.textContent = "ジャイロ: データなし";
         }
 
         function formatFpsStatus(fpsValue) {

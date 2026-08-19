@@ -30,6 +30,7 @@ SAMPLE_FILES = {
 }
 
 FRAME_SIZE = (640, 480)
+CAMERA_NUM = 0
 BOX_HALF_SIZE = 10
 PREVIEW_PORT = 8001
 
@@ -60,7 +61,7 @@ def main():
     samples = load_existing_samples()
     current_color = "red"
 
-    camera = Picamera2()
+    camera = Picamera2(CAMERA_NUM)
     camera.configure(
         camera.create_preview_configuration(
             main={"size": FRAME_SIZE, "format": "BGR888"}

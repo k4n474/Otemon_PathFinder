@@ -23,7 +23,7 @@ def dc_motor(speed):
         motor_in2.value = speed * -1
 
 def set_angle(angle):
-    dif = 0
+    dif = 5
     angle += dif
     if angle > 50 + dif:
         angle = 50 + dif

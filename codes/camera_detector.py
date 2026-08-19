@@ -19,6 +19,7 @@ DEFAULT_SAMPLE_DIR = BASE_DIR / "samples"
 DEFAULT_RECORDING_DIR = BASE_DIR / "recordings"
 
 FRAME_SIZE = (480,270)# (320, 180)(640, 360)(960, 540)
+CAMERA_NUM = 0
 DEFAULT_IGNORE_BELOW_Y = None
 # main は処理用の軽い出力サイズ、raw は広い画角を保つためのセンサー読み出しサイズ。
 RAW_SENSOR_SIZE = (4608, 2592)
@@ -37,7 +38,8 @@ TARGET_LINE_COLORS = {
     "red": (0, 0, 255),
     "green": (0, 200, 0),
 }
-BLACK_WALL_PROBE_START = (100, 220)
+BLACK_WALL_PROBE_END_X = 80
+BLACK_WALL_PROBE_WIDTH_MULTIPLIER = 2.5
 BLACK_WALL_PROBE_HALF_WIDTH = 3
 BLACK_WALL_VALUE_MAX = 70
 BLACK_WALL_MIN_RATIO = 0.15
@@ -95,8 +97,8 @@ COLOR_RULES = {
     "magenta": {
         # 黒い壁に映る暗い反射を除外しつつ、遠方の実物は小面積でも残す。
         "min_saturation": 90,
-        "min_value": 60,
-        "hue_ranges": ((138, 162),),
+        "min_value": 40,
+        "hue_ranges": ((138, 172),),
         "kernel_size": 3,
     },
 }
@@ -637,40 +639,59 @@ def draw_primary_target_line(frame, target_line):
     )
 
 
-def get_black_wall_probe_start(frame_width, direction=1):
-    """direction=1は現在位置、0は画面中央を基準に左右反転した位置を返す。"""
-    probe_x, probe_y = BLACK_WALL_PROBE_START
+def build_black_wall_probe_line(primary, frame, direction=1):
+    """進行方向に応じ、最前面の物体の外側から画面下端へ壁検査線を引く。"""
+    if primary is None:
+        return None
+
+    _, obj = primary
+    center_x, center_y = obj["center"]
+    object_width = obj["size"][0]
+    frame_height, frame_width = frame.shape[:2]
+    horizontal_offset = object_width * BLACK_WALL_PROBE_WIDTH_MULTIPLIER
     if direction == 0:
-        probe_x = frame_width - 1 - probe_x
-    return probe_x, probe_y
+        start_x = int(round(center_x + horizontal_offset))
+        end_x = frame_width - 1 - BLACK_WALL_PROBE_END_X
+    else:
+        start_x = int(round(center_x - horizontal_offset))
+        end_x = BLACK_WALL_PROBE_END_X
+
+    return (
+        (start_x, int(center_y)),
+        (int(end_x), frame_height - 1),
+    )
 
 
-def measure_black_wall_ratio(frame, probe_start=None):
-    """固定検査線の周囲を黒い画素が占める割合を0.0〜1.0で返す。"""
-    frame_height, frame_width = frame.shape[:2]
-    probe_x, probe_y = probe_start or BLACK_WALL_PROBE_START
-    if not (0 <= probe_x < frame_width and 0 <= probe_y < frame_height):
+def measure_black_wall_ratio(frame, probe_line=None):
+    """検査線の周囲を黒い画素が占める割合を0.0〜1.0で返す。"""
+    if probe_line is None:
         return 0.0
 
-    left = max(0, probe_x - BLACK_WALL_PROBE_HALF_WIDTH)
-    right = min(frame_width, probe_x + BLACK_WALL_PROBE_HALF_WIDTH + 1)
-    roi = frame[probe_y:frame_height, left:right]
-    if roi.size == 0:
+    frame_height, frame_width = frame.shape[:2]
+    line_mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
+    cv2.line(
+        line_mask,
+        probe_line[0],
+        probe_line[1],
+        255,
+        BLACK_WALL_PROBE_HALF_WIDTH * 2 + 1,
+        cv2.LINE_8,
+    )
+    inspected_pixels = line_mask > 0
+    if not np.any(inspected_pixels):
         return 0.0
 
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    return float(np.mean(hsv[:, :, 2] <= BLACK_WALL_VALUE_MAX))
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    return float(np.mean(hsv[:, :, 2][inspected_pixels] <= BLACK_WALL_VALUE_MAX))
 
 
-def detect_black_wall_on_probe(frame, probe_start=None):
-    """固定検査線の周囲を黒い画素が一定割合以上占めるか判定する。"""
-    return measure_black_wall_ratio(frame, probe_start) >= BLACK_WALL_MIN_RATIO
+def detect_black_wall_on_probe(frame, probe_line=None):
+    """検査線の周囲を黒い画素が一定割合以上占めるか判定する。"""
+    return measure_black_wall_ratio(frame, probe_line) >= BLACK_WALL_MIN_RATIO
 
 
-def draw_black_wall_probe(frame, black_wall_detected, probe_start=None):
-    frame_height, frame_width = frame.shape[:2]
-    probe_x, probe_y = probe_start or BLACK_WALL_PROBE_START
-    if not (0 <= probe_x < frame_width and 0 <= probe_y < frame_height):
+def draw_black_wall_probe(frame, black_wall_detected, probe_line=None):
+    if probe_line is None:
         return
 
     color = (
@@ -680,8 +701,8 @@ def draw_black_wall_probe(frame, black_wall_detected, probe_start=None):
     )
     cv2.line(
         frame,
-        (probe_x, probe_y),
-        (probe_x, frame_height - 1),
+        probe_line[0],
+        probe_line[1],
         color,
         BLACK_WALL_PROBE_THICKNESS,
         cv2.LINE_AA,
@@ -734,6 +755,7 @@ class PiColorDetector:
         detect_boundary_enabled=True,
         recording_path=None,
         recording_fps=RECORDING_FPS,
+        camera_num=CAMERA_NUM,
     ):
         self.sample_dir = Path(sample_dir)
         self.preview_port = preview_port
@@ -743,6 +765,7 @@ class PiColorDetector:
         self.detect_boundary_enabled = detect_boundary_enabled
         self.recording_path = Path(recording_path) if recording_path is not None else None
         self.recording_fps = recording_fps
+        self.camera_num = camera_num
         self.camera = None
         self.preview = None
         self.models = {}
@@ -774,7 +797,7 @@ class PiColorDetector:
     def start(self):
         self.load_models()
         try:
-            self.camera = Picamera2()
+            self.camera = Picamera2(self.camera_num)
         except IndexError as exc:
             raise RuntimeError(
                 "Pi Camera が見つかりません。カメラの接続、CSI ケーブルの向き、"
@@ -914,11 +937,12 @@ class PiColorDetector:
         # マゼンタは表示専用。走行用ターゲット線の対象にはしない。
         primary = choose_primary_detection(red_objects, green_objects)
         target_line = build_primary_target_line(primary, frame)
-        black_wall_probe_start = get_black_wall_probe_start(
-            frame.shape[1],
+        black_wall_probe_line = build_black_wall_probe_line(
+            primary,
+            frame,
             self.black_wall_probe_direction,
         )
-        black_wall_ratio = measure_black_wall_ratio(frame, black_wall_probe_start)
+        black_wall_ratio = measure_black_wall_ratio(frame, black_wall_probe_line)
         black_wall_on_probe = black_wall_ratio >= BLACK_WALL_MIN_RATIO
 
         if self.enable_preview or self.enable_recording:
@@ -943,7 +967,7 @@ class PiColorDetector:
             draw_black_wall_probe(
                 annotated_frame,
                 black_wall_on_probe,
-                black_wall_probe_start,
+                black_wall_probe_line,
             )
         else:
             annotated_frame = frame
@@ -971,7 +995,16 @@ class PiColorDetector:
             "line_angle_deg": target_line["angle_deg"] if target_line is not None else None,
             "black_wall_on_probe": black_wall_on_probe,
             "black_wall_ratio": black_wall_ratio,
-            "black_wall_probe_start": black_wall_probe_start,
+            "black_wall_status": (
+                f"black wall: {'detected' if black_wall_on_probe else 'clear'} "
+                f"ratio={black_wall_ratio:.2f}"
+                if black_wall_probe_line is not None
+                else "black wall: no target"
+            ),
+            "black_wall_probe_line": black_wall_probe_line,
+            "black_wall_probe_start": (
+                black_wall_probe_line[0] if black_wall_probe_line is not None else None
+            ),
             "fps": self._fps,
         }
 
@@ -1002,6 +1035,7 @@ class PiColorDetector:
             result["magenta_status"],
             result["blue_line_status"],
             result["boundary_status"],
+            result["black_wall_status"],
         ]
         if extra_lines:
             lines.extend(extra_lines)

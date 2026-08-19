@@ -18,6 +18,7 @@ If the smbus module is missing on Raspberry Pi OS:
 from __future__ import annotations
 
 import math
+import threading
 import time
 from dataclasses import dataclass
 
@@ -54,6 +55,9 @@ AK8963_ASAX = 0x10
 ACCEL_SCALE = 16384.0  # +/- 2g
 GYRO_SCALE = 131.0  # +/- 250 deg/s
 MAG_SCALE = 4912.0 / 32760.0  # uT/LSB at 16-bit output
+UPDATE_INTERVAL_SECONDS = 0.01
+MAX_INTEGRATION_INTERVAL_SECONDS = 0.1
+MAX_CONSECUTIVE_READ_ERRORS = 5
 
 
 @dataclass
@@ -242,57 +246,100 @@ class GyroAngleReader:
         self.offsets = {"x": 0.0, "y": 0.0, "z": 0.0}
         self.last_time = time.monotonic()
         self.initialized = False
+        self._lock = threading.RLock()
+        self._stop_event = threading.Event()
+        self._update_thread: threading.Thread | None = None
+        self._read_error: Exception | None = None
+        self._closed = False
 
     def initialize(self, calibrate: bool = True) -> None: 
-        if self.initialized:
-            return
+        with self._lock:
+            if self.initialized:
+                return
+            if self._closed:
+                raise RuntimeError("Gyro reader is already closed")
 
-        self.sensor.initialize(enable_magnetometer=self.enable_magnetometer)
-        if calibrate:
-            self.sensor.calibrate_gyro()
+            self.sensor.initialize(enable_magnetometer=self.enable_magnetometer)
+            if calibrate:
+                self.sensor.calibrate_gyro()
 
-        accel = self.sensor.read_accel()
-        roll, pitch = accel_angles(accel)
-        self.angles = {"x": roll, "y": pitch, "z": 0.0}
-        self.offsets = {"x": 0.0, "y": 0.0, "z": 0.0}
-        self.last_time = time.monotonic()
-        self.initialized = True
+            accel = self.sensor.read_accel()
+            roll, pitch = accel_angles(accel)
+            self.angles = {"x": roll, "y": pitch, "z": 0.0}
+            self.offsets = {"x": 0.0, "y": 0.0, "z": 0.0}
+            self.last_time = time.monotonic()
+            self._read_error = None
+            self.initialized = True
+            self._stop_event.clear()
+            self._update_thread = threading.Thread(
+                target=self._update_loop,
+                name="gyro-angle-reader",
+                daemon=True,
+            )
+            self._update_thread.start()
+
+    def _update_loop(self) -> None:
+        """Sample continuously so the angle does not depend on API call timing."""
+        consecutive_errors = 0
+        while not self._stop_event.wait(UPDATE_INTERVAL_SECONDS):
+            try:
+                accel, gyro = self.sensor.read_motion()
+                now = time.monotonic()
+                with self._lock:
+                    dt = now - self.last_time
+                    self.last_time = now
+                    # A process stall must not create one large, bogus angle jump.
+                    dt = min(max(dt, 0.0), MAX_INTEGRATION_INTERVAL_SECONDS)
+                    acc_roll, acc_pitch = accel_angles(accel)
+                    self.angles["x"] = self.alpha * (
+                        self.angles["x"] + gyro["x"] * dt
+                    ) + (1.0 - self.alpha) * acc_roll
+                    self.angles["y"] = self.alpha * (
+                        self.angles["y"] + gyro["y"] * dt
+                    ) + (1.0 - self.alpha) * acc_pitch
+                    self.angles["z"] += gyro["z"] * dt
+                    self._read_error = None
+                consecutive_errors = 0
+            except (OSError, ValueError) as error:
+                consecutive_errors += 1
+                if consecutive_errors >= MAX_CONSECUTIVE_READ_ERRORS:
+                    with self._lock:
+                        self._read_error = error
 
     def update(self, axis: str | None = None) -> None:
+        """Ensure sampling is running (kept for API compatibility)."""
         self.initialize()
-
-        now = time.monotonic()
-        dt = now - self.last_time
-        self.last_time = now
-
-        if axis == "z":
-            gyro = self.sensor.read_gyro()
-            self.angles["z"] += gyro["z"] * dt
-            return
-
-        accel, gyro = self.sensor.read_motion()
-        acc_roll, acc_pitch = accel_angles(accel)
-
-        self.angles["x"] = self.alpha * (self.angles["x"] + gyro["x"] * dt) + (1.0 - self.alpha) * acc_roll
-        self.angles["y"] = self.alpha * (self.angles["y"] + gyro["y"] * dt) + (1.0 - self.alpha) * acc_pitch
-        self.angles["z"] += gyro["z"] * dt
 
     def get_angle(self, axis: str) -> float:
         axis = normalize_axis(axis)
         self.update(axis)
-        return self.angles[axis] - self.offsets[axis]
+        with self._lock:
+            if self._read_error is not None:
+                raise RuntimeError(
+                    "Failed to read gyro repeatedly"
+                ) from self._read_error
+            return self.angles[axis] - self.offsets[axis]
 
     def reset_angle(self, axis: str | None = None) -> None:
+        self.initialize()
         if axis is None:
-            self.update()
-            self.offsets = self.angles.copy()
+            with self._lock:
+                self.offsets = self.angles.copy()
             return
 
         axis = normalize_axis(axis)
-        self.update(axis)
-        self.offsets[axis] = self.angles[axis]
+        with self._lock:
+            self.offsets[axis] = self.angles[axis]
 
     def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._stop_event.set()
+            update_thread = self._update_thread
+        if update_thread is not None:
+            update_thread.join(timeout=1.0)
         self.sensor.close()
 
 

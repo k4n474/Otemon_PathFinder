@@ -39,18 +39,25 @@ WALL_STRAIGHT_KD = 0.4
 WALL_STRAIGHT_MAX_STEERING = 45
 
 # 障害物・壁回避のPD制御
-AVOID_GREEN_TARGET_ANGLE = -35
-AVOID_RED_TARGET_ANGLE = 35
-AVOID_STEERING_MAX = 45
-AVOID_WALL_STEERING_MAX = 50.0
+AVOID_GREEN_TARGET_ANGLE = -40#42
+AVOID_RED_TARGET_ANGLE = 40
+AVOID_STEERING_MAX = 37##45
+AVOID_WALL_STEERING_ANGLE = 30.0
 AVOID_KP = 1.5
 AVOID_KD = 0.2
 AVOID_GO_STRAIGHT_BELOW_Y = 200
 AVOID_WALL_STEERING_UPDATE_MIN = 0.5
+AVOID_POWER_BOOST_STEERING_THRESHOLD = 30
+AVOID_POWER_BOOST = 15.0
+
+# 後退確認
+BACK_CHECK_AREA_THRESHOLD = 2000
+BACK_CHECK_SECONDS = 1.25
 
 # 青線の検出判定
 BLUE_LINE_COOLDOWN_SECONDS = 2.5
 BLUE_LINE_CROSSING_TARGET = 5
+OBSTACLE_NP_FINISH_DELAY_SECONDS = 3.5
 
 detector = PiColorDetector(enable_recording=True, detect_boundary_enabled=False)
 from newobot import dc_motor, set_angle, stop, cleanup
@@ -188,6 +195,23 @@ def update_blue_line_crossing(result):
     return blue_line_crossing_count
 
 
+def blue_line_finish_reached(finish_state=None, finish_delay_seconds=0.0):
+    """目標回数到達後、指定時間が経過したときだけ終了可能にする。"""
+    if blue_line_crossing_count < BLUE_LINE_CROSSING_TARGET:
+        return False
+    if finish_state is None or finish_delay_seconds <= 0.0:
+        return True
+
+    current_time = time.monotonic()
+    if finish_state["finish_at"] is None:
+        finish_state["finish_at"] = current_time + finish_delay_seconds
+        print(
+            f"\n青線を目標回数検出: あと{finish_delay_seconds:.1f}秒走行します"
+        )
+
+    return current_time >= finish_state["finish_at"]
+
+
 def select_front_object(result):
     """検出結果から、画面の一番下に映っている物体を選ぶ。"""
     selected_color = None
@@ -220,6 +244,40 @@ def select_front_object(result):
     return selected_color, selected_object
 
 
+def back_check(power, keep_camera_running=False):
+    """1フレーム確認し、必要なら後退してマゼンタの左右を返す。
+
+    Returns:
+        int | None: マゼンタが画面左側なら0、右側なら1、未検出なら0。
+    """
+    started_detector_here = detector.camera is None
+    try:
+        if started_detector_here:
+            detector.start()
+
+        result = detector.process_once()
+        _color_name, obj = select_front_object(result)
+        magenta_obj = select_front_magenta_object(result)
+
+        magenta_direction = 0
+        if magenta_obj is not None:
+            frame_center_x = result["frame"].shape[1] / 2.0
+            magenta_direction = 0 if magenta_obj["center"][0] < frame_center_x else 1
+
+        if obj is not None and obj["area"] >= BACK_CHECK_AREA_THRESHOLD:
+            # print("Need to back")
+            set_angle(0)
+            dc_motor(power)
+            time.sleep(BACK_CHECK_SECONDS)
+
+        return magenta_direction
+    finally:
+        stop()
+        set_angle(0)
+        if started_detector_here and not keep_camera_running:
+            detector.stop()
+
+
 def select_front_magenta_object(result):
     """検出したマゼンタのうち、画面上で最も手前の物体を選ぶ。"""
     selected_object = None
@@ -242,7 +300,12 @@ def select_front_magenta_object(result):
     return selected_object
 
 
-def find_obj(duty_cycle, rd):
+def find_obj(
+    duty_cycle,
+    rd,
+    finish_state=None,
+    finish_delay_seconds=0.0,
+):
     """
     最初に停止状態でカメラを確認し、オブジェクトが映っていない場合だけ
     ステアリングを切って前進しながら探索する。
@@ -255,6 +318,15 @@ def find_obj(duty_cycle, rd):
     try:
         while True:
             result = detector.process_once()
+            crossing_count = update_blue_line_crossing(result)
+            if blue_line_finish_reached(
+                finish_state,
+                finish_delay_seconds,
+            ):
+                stop()
+                set_angle(0)
+                return None
+
             color_name, obj = select_front_object(result)
 
             if obj is not None:
@@ -338,7 +410,12 @@ def wall_straight(duty_cycle, stop_y):
         detector.detect_boundary_enabled = previous_boundary_detection
 
 
-def avoid_obj(duty_cycle, direction):
+def avoid_obj(
+    duty_cycle,
+    direction,
+    finish_state=None,
+    finish_delay_seconds=0.0,
+):
     """
     物体のPD回避と黒壁回避を、1回のカメラ取得ループ内で実行する。
 
@@ -354,6 +431,9 @@ def avoid_obj(duty_cycle, direction):
     previous_time = None
     previous_color = None
     previous_wall_steering = None
+    current_duty_cycle = duty_cycle
+    buzzer_active = False
+    buzzer_stop()
     dc_motor(duty_cycle)
 
     while True:
@@ -361,22 +441,24 @@ def avoid_obj(duty_cycle, direction):
         crossing_count = update_blue_line_crossing(result)
         primary = result.get("primary_detection")
 
-        if crossing_count >= BLUE_LINE_CROSSING_TARGET:
+        if blue_line_finish_reached(
+            finish_state,
+            finish_delay_seconds,
+        ):
+            buzzer_stop()
             stop()
             set_angle(0)
             return
 
         # 黒壁が見えている間は、物体より壁の回避を優先する。
         if result.get("black_wall_on_probe", False):
-            black_ratio = max(
-                0.0,
-                min(1.0, result.get("black_wall_ratio", 0.0)),
-            )
-            wall_steering = (
-                wall_steering_sign
-                * AVOID_WALL_STEERING_MAX
-                * black_ratio
-            )
+            if buzzer_active:
+                buzzer_stop()
+                buzzer_active = False
+            if current_duty_cycle != duty_cycle:
+                dc_motor(duty_cycle)
+                current_duty_cycle = duty_cycle
+            wall_steering = wall_steering_sign * AVOID_WALL_STEERING_ANGLE
             if (
                 previous_wall_steering is None
                 or abs(wall_steering - previous_wall_steering)
@@ -397,6 +479,7 @@ def avoid_obj(duty_cycle, direction):
         target_line = build_primary_target_line(control_target, result["frame"])
         line_angle = target_line["angle_deg"] if target_line is not None else None
         if control_target is None or line_angle is None:
+            buzzer_stop()
             stop()
             set_angle(0)
             return
@@ -404,6 +487,12 @@ def avoid_obj(duty_cycle, direction):
         color_name, obj = control_target
         object_y = obj["center"][1]
         if object_y > AVOID_GO_STRAIGHT_BELOW_Y:
+            if buzzer_active:
+                buzzer_stop()
+                buzzer_active = False
+            if current_duty_cycle != duty_cycle:
+                dc_motor(duty_cycle)
+                current_duty_cycle = duty_cycle
             set_angle(0)
             previous_error = None
             previous_time = None
@@ -434,26 +523,79 @@ def avoid_obj(duty_cycle, direction):
 
         steering = AVOID_KP * error + AVOID_KD * derivative
         steering = max(-AVOID_STEERING_MAX, min(AVOID_STEERING_MAX, steering))
+        steering_over_threshold = (
+            abs(steering) > AVOID_POWER_BOOST_STEERING_THRESHOLD
+        )
+        if steering_over_threshold and not buzzer_active:
+            buzzer_start()
+            buzzer_active = True
+        elif not steering_over_threshold and buzzer_active:
+            buzzer_stop()
+            buzzer_active = False
+
+        boosted_duty_cycle = min(100.0, duty_cycle + AVOID_POWER_BOOST)
+        desired_duty_cycle = (
+            boosted_duty_cycle
+            if steering_over_threshold
+            else duty_cycle
+        )
+        if current_duty_cycle != desired_duty_cycle:
+            dc_motor(desired_duty_cycle)
+            current_duty_cycle = desired_duty_cycle
+            if desired_duty_cycle == boosted_duty_cycle:
+                print(
+                    "[avoid_obj] ステアリング角が"
+                    f"±{AVOID_POWER_BOOST_STEERING_THRESHOLD:g}°を超えました: "
+                    f"steering={steering:+.1f}°, power={desired_duty_cycle:.1f}"
+                )
+            else:
+                print(
+                    "[avoid_obj] ステアリング角が"
+                    f"±{AVOID_POWER_BOOST_STEERING_THRESHOLD:g}°以内に戻りました: "
+                    f"steering={steering:+.1f}°, power={desired_duty_cycle:.1f}"
+                )
         set_angle(steering)
         previous_error = error
         previous_time = current_time
         previous_color = color_name
 
 
-def obstacle_challenge(power, direction):
-    """カメラを開始し、探索と回避を終了条件まで繰り返す。"""
+def _run_obstacle_challenge(power, direction, finish_delay_seconds=0.0):
+    """指定した終了遅延で障害物競技を実行する。"""
+    finish_state = {"finish_at": None}
     try:
-        detector.start()
+        # back_checkから動作中のカメラを引き継いだ場合は再初期化しない。
+        if detector.camera is None:
+            detector.start()
         # lidar.start()
 
         while True:
             # 対象物が見つかるまで探索する。
-            find_obj(power, direction)
+            find_obj(
+                power + 20,
+                direction,
+                finish_state,
+                finish_delay_seconds,
+            )
+
+            if blue_line_finish_reached(
+                finish_state,
+                finish_delay_seconds,
+            ):
+                break
 
             # 見つけた対象物と壁を回避する。
-            avoid_obj(power, direction)
+            avoid_obj(
+                power,
+                direction,
+                finish_state,
+                finish_delay_seconds,
+            )
 
-            if blue_line_crossing_count >= BLUE_LINE_CROSSING_TARGET:
+            if blue_line_finish_reached(
+                finish_state,
+                finish_delay_seconds,
+            ):
                 break
 
         stop()
@@ -465,20 +607,36 @@ def obstacle_challenge(power, direction):
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"エラー: {exc}")
     finally:
+        buzzer_stop()
         detector.stop()
         # close_gyro()
         if detector.recording_path is not None:
             print(
-                f"録画保存: scp otm@10.129.219.239:{detector.recording_path} "
+                f"録画保存: scp otm@192.168.137.213:{detector.recording_path} "
                 "~/workspace/pivideos"
             )
         # cleanup()
 
 
+def obstacle_challenge(power, direction):
+    """青線を目標回数検出したら、すぐに停止する。"""
+    _run_obstacle_challenge(power, direction)
+
+
+def obstacle_challenge_np(power):
+    """青線を目標回数検出後も制御を3秒間続けて停止する。"""
+    direction = back_check((power + 10) * -1, keep_camera_running=True)
+    _run_obstacle_challenge(
+        power,
+        direction,
+        finish_delay_seconds=OBSTACLE_NP_FINISH_DELAY_SECONDS,
+    )
+
+
 def main():
-    obstacle_challenge(45, 1)
+    obstacle_challenge(35, 1)
     stop()
-    dc_motor(-45)
+    dc_motor(35)
     time.sleep(1)
     stop()
     start_parking(1).join()

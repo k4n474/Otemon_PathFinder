@@ -1,9 +1,9 @@
 """左右で最も長い壁を選び、200 mm離れて走る。"""
 import time
 import RPi.GPIO as GPIO
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 
 from algorithm import (
@@ -18,25 +18,27 @@ from newobot import cleanup, dc_motor, set_angle, stop
 
 
 TARGET_DISTANCE = 250
-MOTOR_SPEED = 42
-TURN_MOTOR_SPEED = 46
+MOTOR_SPEED = 38
+TURN_MOTOR_SPEED = 42
 STEERING_KP = 0.1
 STEERING_KI = 0.01
-STEERING_KD = 0.12
-MAX_STEERING_ANGLE = 35
+STEERING_KD = 0.1
+MAX_STEERING_ANGLE = 30.0
 INTEGRAL_LIMIT = 800
 INTERVAL = 0.1
-FRONT_WALL_TURN_DISTANCE = 420
-FRONT_WALL_PLAN_DISTANCE = 420
+FRONT_WALL_TURN_DISTANCE = 360
+FRONT_WALL_PLAN_DISTANCE = 800
 TURN_STEERING_ANGLE = 40
-TURN_ANGLE_REDUCTION = 0.0
-MIN_TURN_TARGET_ANGLE = 30.0
+TURN_ANGLE_REDUCTION = 5.0
+MIN_TURN_TARGET_ANGLE = 40.0
 TURN_TIMEOUT = 20.0
 TURN_END_STOP_SECONDS = 1.0
 TRACE_SELECTION_SAMPLES = 0
 MAX_TURN_COUNT = 12
-FINAL_STOP_FRONT_DISTANCE = 1600
+FINAL_RUN_STRAIGHT_SECONDS = 2.0
+FINAL_STOP_FRONT_DISTANCE = 1500
 WALL_ROLE_LOCK_DELAY = 2.0
+FRONT_WALL_IGNORE_AFTER_TURN_SECONDS = 2.0
 
 
 viewer_app = Flask(__name__)
@@ -58,6 +60,11 @@ viewer_data = {
         "right": None,
         "trace": None
     },
+    "gyro": {
+        "ready": False,
+        "yaw": None,
+        "error": None
+    },
     "turn": {
         "status": "waiting",
         "active": False,
@@ -66,6 +73,12 @@ viewer_data = {
         "turned_angle": 0.0
     }
 }
+
+
+@viewer_app.get("/")
+def viewer_home():
+    """Live Viewer本体をAPIと同じサーバーから配信する。"""
+    return send_from_directory(viewer_app.root_path, "index.html")
 
 
 @viewer_app.get("/api/points")
@@ -144,6 +157,18 @@ def update_turn_viewer(
             "target_angle": target_angle,
             "turned_angle": turned_angle
         }
+
+
+def update_gyro_viewer():
+    """現在のYaw角と読み取り状態をLive Viewerへ配信する。"""
+    try:
+        yaw = round(get_angle("z"), 1)
+        gyro_state = {"ready": True, "yaw": yaw, "error": None}
+    except RuntimeError as error:
+        gyro_state = {"ready": False, "yaw": None, "error": str(error)}
+
+    with viewer_lock:
+        viewer_data["gyro"] = gyro_state
 
 
 def choose_turn_direction(_walls, _side_walls, trace_side=None):
@@ -293,9 +318,86 @@ def turn_by_front_wall(front_wall, direction, target_angle=None):
 
 
 BUZZER = 19
+BLINK_LED = 21
+PULSE_LEDS = (16, 20)
+LED_TURN_INTERVAL = 0.04
+BLINK_LED_BRIGHT_DUTY = 100.0
+BLINK_LED_DIM_DUTY = 20.0
+PULSE_LED_ON_SECONDS = 0.1
+PULSE_LED_OFF_SECONDS = 0.8
+PULSE_LED_BRIGHT_DUTY = 100.0
+PULSE_LED_DIM_DUTY = 40.0
+PULSE_LED_PWM_FREQUENCY = 200
+LED_UPDATE_INTERVAL = 0.01
+START_FADE_SECONDS = (1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2)
+START_FULL_BRIGHT_SECONDS = 2.0
+COMPLETE_SIGNAL_SECONDS = 4.0
+COMPLETE_FADE_SECONDS = 1.0
+COMPLETE_BUZZER_INTERVAL = 0.2
+COMPLETE_BUZZER_ON_SECONDS = 0.05
 
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(BUZZER, GPIO.OUT)
+
+
+def run_leds(stop_event, turning_event):
+    """GPIO21を状態表示し、GPIO16・20の輝度を周期的に変える。"""
+
+    turn_led_on = True
+    pulse_led_on = True
+    pulse_pwms = [
+        GPIO.PWM(pin, PULSE_LED_PWM_FREQUENCY)
+        for pin in PULSE_LEDS
+    ]
+    blink_pwm = GPIO.PWM(BLINK_LED, PULSE_LED_PWM_FREQUENCY)
+    blink_pwm.start(BLINK_LED_BRIGHT_DUTY)
+    for pwm in pulse_pwms:
+        pwm.start(PULSE_LED_BRIGHT_DUTY)
+
+    now = time.monotonic()
+    next_turn_toggle_at = now + LED_TURN_INTERVAL
+    next_pulse_toggle_at = now + PULSE_LED_ON_SECONDS
+
+    try:
+        while not stop_event.is_set():
+            now = time.monotonic()
+            if turning_event.is_set():
+                if now >= next_turn_toggle_at:
+                    turn_led_on = not turn_led_on
+                    blink_pwm.ChangeDutyCycle(
+                        BLINK_LED_BRIGHT_DUTY
+                        if turn_led_on
+                        else BLINK_LED_DIM_DUTY
+                    )
+                    next_turn_toggle_at = now + LED_TURN_INTERVAL
+            else:
+                turn_led_on = True
+                blink_pwm.ChangeDutyCycle(BLINK_LED_BRIGHT_DUTY)
+                next_turn_toggle_at = now + LED_TURN_INTERVAL
+
+            if now >= next_pulse_toggle_at:
+                pulse_led_on = not pulse_led_on
+                duty = (
+                    PULSE_LED_BRIGHT_DUTY
+                    if pulse_led_on
+                    else PULSE_LED_DIM_DUTY
+                )
+                for pwm in pulse_pwms:
+                    pwm.ChangeDutyCycle(duty)
+                pulse_duration = (
+                    PULSE_LED_ON_SECONDS
+                    if pulse_led_on
+                    else PULSE_LED_OFF_SECONDS
+                )
+                next_pulse_toggle_at = now + pulse_duration
+
+            if stop_event.wait(LED_UPDATE_INTERVAL):
+                break
+    finally:
+        blink_pwm.stop()
+        for pwm in pulse_pwms:
+            pwm.stop()
+        GPIO.output((BLINK_LED, *PULSE_LEDS), GPIO.LOW)
 
 def buzzer_stop():
     GPIO.output(BUZZER, GPIO.LOW)   # 止める
@@ -307,8 +409,97 @@ def buzzer_sleep():
     GPIO.output(BUZZER, GPIO.LOW)   # 止める
 
 
+def signal_run_complete():
+    """全LEDのフェードとブザーで正常終了を通知する。"""
+
+    complete_leds = (*PULSE_LEDS, BLINK_LED)
+    complete_pwms = [
+        GPIO.PWM(pin, PULSE_LED_PWM_FREQUENCY)
+        for pin in complete_leds
+    ]
+    for pwm in complete_pwms:
+        pwm.start(100.0)
+
+    started_at = time.monotonic()
+    buzzer_on = False
+    try:
+        while True:
+            elapsed = time.monotonic() - started_at
+            if elapsed >= COMPLETE_SIGNAL_SECONDS:
+                break
+
+            fade_progress = (
+                elapsed % COMPLETE_FADE_SECONDS
+            ) / COMPLETE_FADE_SECONDS
+            duty = 100.0 * (1.0 - fade_progress)
+            for pwm in complete_pwms:
+                pwm.ChangeDutyCycle(duty)
+
+            should_buzz = (
+                elapsed % COMPLETE_BUZZER_INTERVAL
+                < COMPLETE_BUZZER_ON_SECONDS
+            )
+            if should_buzz != buzzer_on:
+                buzzer_on = should_buzz
+                GPIO.output(
+                    BUZZER,
+                    GPIO.HIGH if buzzer_on else GPIO.LOW
+                )
+
+            time.sleep(LED_UPDATE_INTERVAL)
+    finally:
+        GPIO.output(BUZZER, GPIO.LOW)
+        for pwm in complete_pwms:
+            pwm.stop()
+        GPIO.output(complete_leds, GPIO.LOW)
+
+
+def signal_run_start():
+    """全LEDのフェードを加速させ、全点灯後に走行開始を通知する。"""
+
+    start_leds = (*PULSE_LEDS, BLINK_LED)
+    start_pwms = [
+        GPIO.PWM(pin, PULSE_LED_PWM_FREQUENCY)
+        for pin in start_leds
+    ]
+    for pwm in start_pwms:
+        pwm.start(100.0)
+
+    try:
+        for fade_seconds in START_FADE_SECONDS:
+            fade_started_at = time.monotonic()
+            while True:
+                elapsed = time.monotonic() - fade_started_at
+                if elapsed >= fade_seconds:
+                    break
+
+                duty = 100.0 * (1.0 - elapsed / fade_seconds)
+                for pwm in start_pwms:
+                    pwm.ChangeDutyCycle(duty)
+                time.sleep(LED_UPDATE_INTERVAL)
+
+            for pwm in start_pwms:
+                pwm.ChangeDutyCycle(0.0)
+
+        for pwm in start_pwms:
+            pwm.ChangeDutyCycle(100.0)
+        time.sleep(START_FULL_BRIGHT_SECONDS)
+    finally:
+        for pwm in start_pwms:
+            pwm.stop()
+        GPIO.output(start_leds, GPIO.HIGH)
+
+
 def run():
     lidar = LidarReader()
+    led_stop_event = Event()
+    turning_event = Event()
+    led_thread = Thread(
+        target=run_leds,
+        args=(led_stop_event, turning_event),
+        daemon=True,
+        name="status-led"
+    )
     trace_side = None
     trace_length_totals = {
         "left": 0.0,
@@ -319,8 +510,11 @@ def run():
     planned_turn_angle = None
     turn_count = 0
     final_run_active = False
+    final_distance_check_ready_at = None
     locked_role_angles = None
     role_lock_ready_at = None
+    front_wall_ignore_until = None
+    run_completed = False
     pid = WallPIDController(
         target_distance=TARGET_DISTANCE,
         kp=STEERING_KP,
@@ -338,25 +532,33 @@ def run():
     try:
         stop()
         set_angle(0)
-        lidar.start()
-        BUZZER = 19
 
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(BUZZER, GPIO.OUT)
+        GPIO.setup(BLINK_LED, GPIO.OUT, initial=GPIO.LOW)
+        GPIO.setup(PULSE_LEDS, GPIO.OUT, initial=GPIO.LOW)
+
+        lidar.start()
 
         print("ジャイロを初期化中です。ロボットを動かさないでください")
         reset_angle("z")
+        update_gyro_viewer()
         print("ジャイロ角度を0°にリセットしました")
         viewer_thread.start()
         print(
             "Live Viewer API: "
             "http://<Raspberry PiのIP>:5000/api/points"
         )
+        print("起動ライト演出を開始します")
+        signal_run_start()
+        led_thread.start()
+        print("走行を開始します")
         previous_time = time.monotonic()
         # time.sleep(4)
         role_lock_ready_at = time.monotonic() + WALL_ROLE_LOCK_DELAY
         while True:
             current_time = time.monotonic()
+            update_gyro_viewer()
             dt = current_time - previous_time
             previous_time = current_time
             points = lidar.get_points()
@@ -388,14 +590,19 @@ def run():
                 points,
                 detected_walls=detected_walls
             )
+            ignoring_front_wall = (
+                front_wall_ignore_until is not None
+                and current_time < front_wall_ignore_until
+            )
+            control_front_wall = None if ignoring_front_wall else front_wall
             update_viewer(
                 points,
                 detected_walls,
                 side_walls
             )
             detected_turn_angle = (
-                turn_angle_for_front_wall(front_wall)
-                if front_wall is not None
+                turn_angle_for_front_wall(control_front_wall)
+                if control_front_wall is not None
                 else None
             )
             target_turn_angle = (
@@ -410,22 +617,26 @@ def run():
             
             if (
                 final_run_active
-                and front_wall is not None
-                and front_wall["front_distance"]
+                and final_distance_check_ready_at is not None
+                and current_time >= final_distance_check_ready_at
+                and control_front_wall is not None
+                and control_front_wall["front_distance"]
                 <= FINAL_STOP_FRONT_DISTANCE
             ):
                 stop()
                 set_angle(0)
                 print(
                     "\n3周完了後の停止位置に到達: "
-                    f"前壁まで {front_wall['front_distance']:.1f} mm"
+                    f"前壁まで {control_front_wall['front_distance']:.1f} mm"
                 )
+                run_completed = True
                 break
 
             if (
-                front_wall is not None
+                not final_run_active
+                and control_front_wall is not None
                 and turn_target_is_valid
-                and front_wall["front_distance"]
+                and control_front_wall["front_distance"]
                 <= FRONT_WALL_TURN_DISTANCE
             ):
                 turn_direction = (
@@ -447,19 +658,27 @@ def run():
 
                 print(
                     "\n前方壁を検出: "
-                    f"{front_wall['front_distance']:.1f} mm"
+                    f"{control_front_wall['front_distance']:.1f} mm"
                     f" / 壁垂線角度: "
-                    f"{front_wall['normal_angle']:.1f}°"
+                    f"{control_front_wall['normal_angle']:.1f}°"
                     f" / 旋回方向: {turn_direction}"
                     f" / 目標旋回角度: {target_turn_angle:.1f}°"
                 )
                 pid.reset()
                 locked_role_angles = None
                 role_lock_ready_at = None
-                turn_by_front_wall(
-                    front_wall,
-                    turn_direction,
-                    target_turn_angle
+                turning_event.set()
+                try:
+                    turn_by_front_wall(
+                        control_front_wall,
+                        turn_direction,
+                        target_turn_angle
+                    )
+                finally:
+                    turning_event.clear()
+                front_wall_ignore_until = (
+                    time.monotonic()
+                    + FRONT_WALL_IGNORE_AFTER_TURN_SECONDS
                 )
                 role_lock_ready_at = (
                     time.monotonic() + WALL_ROLE_LOCK_DELAY
@@ -471,8 +690,15 @@ def run():
 
                 if turn_count >= MAX_TURN_COUNT:
                     final_run_active = True
+                    final_distance_check_ready_at = (
+                        time.monotonic() + FINAL_RUN_STRAIGHT_SECONDS
+                    )
                     print(
-                        "3周完了: 前壁まで1300 mmの位置へ走行します"
+                        "3周完了: 旋回後に"
+                        f"{FINAL_RUN_STRAIGHT_SECONDS:.1f}秒間"
+                        "壁トレースを続けた後、"
+                        "前壁との距離による停止判定を開始します: "
+                        f"停止距離 {FINAL_STOP_FRONT_DISTANCE} mm"
                     )
 
                 planned_turn_direction = None
@@ -481,10 +707,11 @@ def run():
                 continue
 
             if (
-                front_wall is not None
+                not final_run_active
+                and control_front_wall is not None
                 and detected_turn_angle is not None
                 and detected_turn_angle > MIN_TURN_TARGET_ANGLE
-                and front_wall["front_distance"]
+                and control_front_wall["front_distance"]
                 <= FRONT_WALL_PLAN_DISTANCE
             ):
                 if planned_turn_angle is None:
@@ -503,6 +730,8 @@ def run():
                         continue
 
                     planned_turn_angle = detected_turn_angle
+                    # 旋回開始の予告として、計画確定時点から高速点滅する。
+                    turning_event.set()
                     update_turn_viewer(
                         False,
                         planned_turn_direction,
@@ -515,7 +744,7 @@ def run():
                         f"{planned_turn_direction}"
                         f" / {planned_turn_angle:.1f}°"
                         f" / 前壁まで"
-                        f" {front_wall['front_distance']:.1f} mm"
+                        f" {control_front_wall['front_distance']:.1f} mm"
                     )
 
             left_wall = side_walls["left"]
@@ -564,6 +793,12 @@ def run():
                 )
             else:
                 steering = pid.update(trace_wall, dt)
+                # カーブ直前は角を側壁として拾ってPID出力が反転することが
+                # ある。旋回計画後は予定方向と逆の操舵だけを抑止する。
+                if planned_turn_direction == "right":
+                    steering = max(0.0, steering)
+                elif planned_turn_direction == "left":
+                    steering = min(0.0, steering)
                 set_angle(steering)
                 dc_motor(MOTOR_SPEED)
                 status = (
@@ -600,11 +835,22 @@ def run():
         print("\n終了します")
 
     finally:
+        led_stop_event.set()
+        if led_thread.is_alive():
+            led_thread.join(timeout=LED_TURN_INTERVAL + 0.1)
+        if run_completed:
+            signal_run_complete()
+        GPIO.output((BLINK_LED, *PULSE_LEDS), GPIO.LOW)
         stop()
         set_angle(0)
         lidar.stop()
         close_gyro()
         cleanup()
+        GPIO.cleanup((
+            BUZZER,
+            BLINK_LED,
+            *PULSE_LEDS
+        ))
 
 
 if __name__ == "__main__":

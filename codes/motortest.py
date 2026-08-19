@@ -27,9 +27,9 @@ try:
     while True:
         
         # 30%の強さで1秒だけ回す
-        set_angle(40)
+        set_angle(5)
 
-        dc_motor(60)
+        dc_motor(0)
 
 
 finally:
