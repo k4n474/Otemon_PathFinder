@@ -11,6 +11,7 @@ from algorithm import (
     detect_front_and_side_walls,
     detect_walls
 )
+from button import button_sleep
 from gyro import close_gyro, get_angle, reset_angle
 from lidar_read import LidarReader
 from lidar_wall_follow import WallPIDController
@@ -18,8 +19,8 @@ from newobot import cleanup, dc_motor, set_angle, stop
 
 
 TARGET_DISTANCE = 250
-MOTOR_SPEED = 38
-TURN_MOTOR_SPEED = 42
+MOTOR_SPEED = 40
+TURN_MOTOR_SPEED = 44
 STEERING_KP = 0.1
 STEERING_KI = 0.01
 STEERING_KD = 0.1
@@ -792,7 +793,13 @@ def run():
                     "（未検出）/ motor: STOP"
                 )
             else:
-                steering = pid.update(trace_wall, dt)
+                # 前壁が計画距離内に入り旋回計画が確定した後は、角を
+                # 側壁として拾った際の急な操舵を防ぐためD項を無効化する。
+                steering = pid.update(
+                    trace_wall,
+                    dt,
+                    derivative_enabled=planned_turn_angle is None
+                )
                 # カーブ直前は角を側壁として拾ってPID出力が反転することが
                 # ある。旋回計画後は予定方向と逆の操舵だけを抑止する。
                 if planned_turn_direction == "right":
@@ -854,4 +861,5 @@ def run():
 
 
 if __name__ == "__main__":
+    button_sleep()
     run()

@@ -3,16 +3,19 @@
 処理の流れは大きく次の3段階に分かれる。
 1. カメラで走行対象を探す
 2. 対象物と黒壁を避けながら青線の検出回数を数える
-3. 規定回数の青線を検出したらすぐに停止する
+3. 規定回数の青線と競技ごとの追加条件を満たしたら停止する
 """
 
 import time
+
+import RPi.GPIO as GPIO
 
 from camera_detector import PiColorDetector, build_primary_target_line
 from gyro import get_angle, reset_angle, close_gyro
 # from ultrasound import us_get, dis_get, us_back_get, dis_back_get
 
 from buzzer import buzzer_start, buzzer_stop, buzzer_sleep, hurt_beats
+from button import button_sleep
 from lidar_read import LidarReader
 from lidar_wall_follow import follow_wall_until_front_distance
 from park import start_parking
@@ -48,7 +51,7 @@ AVOID_KD = 0.2
 AVOID_GO_STRAIGHT_BELOW_Y = 200
 AVOID_WALL_STEERING_UPDATE_MIN = 0.5
 AVOID_POWER_BOOST_STEERING_THRESHOLD = 30
-AVOID_POWER_BOOST = 15.0
+AVOID_POWER_BOOST = 5
 
 # 後退確認
 BACK_CHECK_AREA_THRESHOLD = 2000
@@ -56,8 +59,12 @@ BACK_CHECK_SECONDS = 1.25
 
 # 青線の検出判定
 BLUE_LINE_COOLDOWN_SECONDS = 2.5
-BLUE_LINE_CROSSING_TARGET = 5
-OBSTACLE_NP_FINISH_DELAY_SECONDS = 3.5
+BLUE_LINE_CROSSING_TARGET = 4
+BLUE_LINE_LOST_CONFIRM_SECONDS = 1.0
+BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE = 1.5
+
+# 障害物競技中に常時点灯する後方ライト
+REAR_LIGHT_PIN = 21
 
 detector = PiColorDetector(enable_recording=True, detect_boundary_enabled=False)
 from newobot import dc_motor, set_angle, stop, cleanup
@@ -195,10 +202,62 @@ def update_blue_line_crossing(result):
     return blue_line_crossing_count
 
 
-def blue_line_finish_reached(finish_state=None, finish_delay_seconds=0.0):
-    """目標回数到達後、指定時間が経過したときだけ終了可能にする。"""
+def blue_line_finish_reached(
+    finish_state=None,
+    finish_delay_seconds=0.0,
+    result=None,
+    require_magenta_absent=False,
+):
+    """青線が目標回数に達し、追加の終了条件も満たしたか判定する。
+
+    ``require_magenta_absent`` が有効な場合は、周回方向ごとに決めた時間、
+    最後の青線が連続して見えなくなった後、マゼンタの個数を判定する。
+    """
     if blue_line_crossing_count < BLUE_LINE_CROSSING_TARGET:
         return False
+
+    if require_magenta_absent:
+        if finish_state is None:
+            return False
+
+        if result is not None:
+            current_time = time.monotonic()
+            blue_line_is_detected = result.get("blue_line") is not None
+            direction = finish_state.get("direction", 0)
+            blue_line_lost_confirm_seconds = (
+                BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE
+                if direction == 1
+                else BLUE_LINE_LOST_CONFIRM_SECONDS
+            )
+
+            if not finish_state.get("blue_line_cleared", False):
+                if blue_line_is_detected:
+                    finish_state["blue_line_absent_since"] = None
+                elif finish_state.get("blue_line_absent_since") is None:
+                    finish_state["blue_line_absent_since"] = current_time
+                elif (
+                    current_time - finish_state["blue_line_absent_since"]
+                    >= blue_line_lost_confirm_seconds
+                ):
+                    finish_state["blue_line_cleared"] = True
+                    print(
+                        "\n青線が"
+                        f"{blue_line_lost_confirm_seconds:.1f}秒以上"
+                        "見えなくなりました"
+                    )
+
+            if finish_state.get("blue_line_cleared", False):
+                magenta_count = len(result.get("magenta_objects", []))
+                magenta_limit = 1 if direction == 1 else 0
+                finish_state["magenta_condition_met"] = (
+                    magenta_count <= magenta_limit
+                )
+
+        if not finish_state.get("blue_line_cleared", False):
+            return False
+        if not finish_state.get("magenta_condition_met", False):
+            return False
+
     if finish_state is None or finish_delay_seconds <= 0.0:
         return True
 
@@ -265,7 +324,7 @@ def back_check(power, keep_camera_running=False):
             magenta_direction = 0 if magenta_obj["center"][0] < frame_center_x else 1
 
         if obj is not None and obj["area"] >= BACK_CHECK_AREA_THRESHOLD:
-            # print("Need to back")
+            print("Need to back")
             set_angle(0)
             dc_motor(power)
             time.sleep(BACK_CHECK_SECONDS)
@@ -305,6 +364,7 @@ def find_obj(
     rd,
     finish_state=None,
     finish_delay_seconds=0.0,
+    require_magenta_absent=False,
 ):
     """
     最初に停止状態でカメラを確認し、オブジェクトが映っていない場合だけ
@@ -322,6 +382,8 @@ def find_obj(
             if blue_line_finish_reached(
                 finish_state,
                 finish_delay_seconds,
+                result,
+                require_magenta_absent,
             ):
                 stop()
                 set_angle(0)
@@ -415,6 +477,7 @@ def avoid_obj(
     direction,
     finish_state=None,
     finish_delay_seconds=0.0,
+    require_magenta_absent=False,
 ):
     """
     物体のPD回避と黒壁回避を、1回のカメラ取得ループ内で実行する。
@@ -444,6 +507,8 @@ def avoid_obj(
         if blue_line_finish_reached(
             finish_state,
             finish_delay_seconds,
+            result,
+            require_magenta_absent,
         ):
             buzzer_stop()
             stop()
@@ -560,9 +625,20 @@ def avoid_obj(
         previous_color = color_name
 
 
-def _run_obstacle_challenge(power, direction, finish_delay_seconds=0.0):
+def _run_obstacle_challenge(
+    power,
+    direction,
+    finish_delay_seconds=0.0,
+    require_magenta_absent=False,
+):
     """指定した終了遅延で障害物競技を実行する。"""
-    finish_state = {"finish_at": None}
+    finish_state = {
+        "finish_at": None,
+        "direction": direction,
+        "blue_line_absent_since": None,
+        "blue_line_cleared": False,
+        "magenta_condition_met": False,
+    }
     try:
         # back_checkから動作中のカメラを引き継いだ場合は再初期化しない。
         if detector.camera is None:
@@ -576,11 +652,13 @@ def _run_obstacle_challenge(power, direction, finish_delay_seconds=0.0):
                 direction,
                 finish_state,
                 finish_delay_seconds,
+                require_magenta_absent,
             )
 
             if blue_line_finish_reached(
                 finish_state,
                 finish_delay_seconds,
+                require_magenta_absent=require_magenta_absent,
             ):
                 break
 
@@ -590,11 +668,13 @@ def _run_obstacle_challenge(power, direction, finish_delay_seconds=0.0):
                 direction,
                 finish_state,
                 finish_delay_seconds,
+                require_magenta_absent,
             )
 
             if blue_line_finish_reached(
                 finish_state,
                 finish_delay_seconds,
+                require_magenta_absent=require_magenta_absent,
             ):
                 break
 
@@ -620,25 +700,57 @@ def _run_obstacle_challenge(power, direction, finish_delay_seconds=0.0):
 
 def obstacle_challenge(power, direction):
     """青線を目標回数検出したら、すぐに停止する。"""
-    _run_obstacle_challenge(power, direction)
-
-
-def obstacle_challenge_np(power):
-    """青線を目標回数検出後も制御を3秒間続けて停止する。"""
-    direction = back_check((power + 10) * -1, keep_camera_running=True)
-    _run_obstacle_challenge(
+    _run_obstacle_with_rear_light(
         power,
         direction,
-        finish_delay_seconds=OBSTACLE_NP_FINISH_DELAY_SECONDS,
     )
 
 
+def _run_obstacle_with_rear_light(
+    power,
+    direction,
+    finish_delay_seconds=0.0,
+):
+    """後方ライトを点灯し、障害物競技終了時に必ず消灯する。"""
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(REAR_LIGHT_PIN, GPIO.OUT, initial=GPIO.LOW)
+    GPIO.output(REAR_LIGHT_PIN, GPIO.HIGH)
+    try:
+        _run_obstacle_challenge(
+            power,
+            direction,
+            finish_delay_seconds=finish_delay_seconds,
+        )
+    finally:
+        GPIO.output(REAR_LIGHT_PIN, GPIO.LOW)
+
+
+def obstacle_challenge_np(power):
+    """周回方向別の青線消失時間とマゼンタ個数で停止する。"""
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(REAR_LIGHT_PIN, GPIO.OUT, initial=GPIO.LOW)
+    GPIO.output(REAR_LIGHT_PIN, GPIO.HIGH)
+    # button_sleep()
+    try:
+        direction = back_check(
+            (power + 10) * -1,
+            keep_camera_running=True,
+        )
+        _run_obstacle_challenge(
+            power,
+            direction,
+            require_magenta_absent=True,
+        )
+    finally:
+        GPIO.output(REAR_LIGHT_PIN, GPIO.LOW)
+
+
 def main():
-    obstacle_challenge(35, 1)
+    obstacle_challenge_np(62)
     stop()
-    dc_motor(35)
-    time.sleep(1)
-    stop()
-    start_parking(1).join()
+    # dc_motor(35)
+    # time.sleep(1)
+    # stop()
+    # start_parking(1).join()
 if __name__ == "__main__":
     main()

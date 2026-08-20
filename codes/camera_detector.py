@@ -38,7 +38,7 @@ TARGET_LINE_COLORS = {
     "red": (0, 0, 255),
     "green": (0, 200, 0),
 }
-BLACK_WALL_PROBE_END_X = 80
+BLACK_WALL_PROBE_END_X = 60#80
 BLACK_WALL_PROBE_WIDTH_MULTIPLIER = 2.5
 BLACK_WALL_PROBE_HALF_WIDTH = 3
 BLACK_WALL_VALUE_MAX = 70
@@ -97,7 +97,7 @@ COLOR_RULES = {
     "magenta": {
         # 黒い壁に映る暗い反射を除外しつつ、遠方の実物は小面積でも残す。
         "min_saturation": 90,
-        "min_value": 40,
+        "min_value": 60,
         "hue_ranges": ((138, 172),),
         "kernel_size": 3,
     },
@@ -640,20 +640,28 @@ def draw_primary_target_line(frame, target_line):
 
 
 def build_black_wall_probe_line(primary, frame, direction=1):
-    """進行方向に応じ、最前面の物体の外側から画面下端へ壁検査線を引く。"""
+    """物体の色に応じた外側から、進行方向側の画面下端へ検査線を引く。
+
+    物体側は赤なら右、緑なら左に置く。画面下端側は従来どおり
+    ``direction`` に応じた位置を使用する。
+    """
     if primary is None:
         return None
 
-    _, obj = primary
+    color_name, obj = primary
     center_x, center_y = obj["center"]
     object_width = obj["size"][0]
     frame_height, frame_width = frame.shape[:2]
     horizontal_offset = object_width * BLACK_WALL_PROBE_WIDTH_MULTIPLIER
-    if direction == 0:
+
+    if color_name == "red":
         start_x = int(round(center_x + horizontal_offset))
-        end_x = frame_width - 1 - BLACK_WALL_PROBE_END_X
     else:
         start_x = int(round(center_x - horizontal_offset))
+
+    if direction == 0:
+        end_x = frame_width - 1 - BLACK_WALL_PROBE_END_X
+    else:
         end_x = BLACK_WALL_PROBE_END_X
 
     return (

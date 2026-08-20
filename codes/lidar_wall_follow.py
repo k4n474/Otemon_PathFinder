@@ -35,7 +35,7 @@ class WallPIDController:
         self.integral = 0.0
         self.previous_error = None
 
-    def update(self, wall, dt):
+    def update(self, wall, dt, derivative_enabled=True):
         error = wall["wall_distance"] - self.target_distance
         self.integral += error * dt
         self.integral = max(
@@ -51,7 +51,7 @@ class WallPIDController:
         output = (
             self.kp * error
             + self.ki * self.integral
-            + self.kd * derivative
+            + (self.kd * derivative if derivative_enabled else 0.0)
         )
         side_sign = 1 if wall["side"] == "right" else -1
         steering = side_sign * output
