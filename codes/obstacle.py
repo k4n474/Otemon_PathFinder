@@ -28,43 +28,35 @@ lidar = LidarReader(scan_frequency_increase_hz=6)
 # 走行設定
 # ---------------------------------------------------------------------------
 
-# 基本設定
-TIMEOUT_SECONDS = 30
-FAR_OBJECT_AREA_MAX = 3500
 
 # ジャイロを使った旋回走行
-GYRO_TURN_TIMEOUT_SECONDS = 20.0
+GYRO_TURN_TIMEOUT_SECONDS = 20.0  # ジャイロ旋回を強制終了するまでの最大秒数
 
-# 壁と床の境界線に合わせるPD制御
-WALL_STRAIGHT_TARGET_ANGLE = 0.0
-WALL_STRAIGHT_KP = 3.5
-WALL_STRAIGHT_KD = 0.4
-WALL_STRAIGHT_MAX_STEERING = 45
 
 # 障害物・壁回避のPD制御
-AVOID_GREEN_TARGET_ANGLE = -40#42
-AVOID_RED_TARGET_ANGLE = 40
-AVOID_STEERING_MAX = 37##45
-AVOID_WALL_STEERING_ANGLE = 30.0
-AVOID_KP = 1.5
-AVOID_KD = 0.2
-AVOID_GO_STRAIGHT_BELOW_Y = 200
-AVOID_WALL_STEERING_UPDATE_MIN = 0.5
-AVOID_POWER_BOOST_STEERING_THRESHOLD = 30
-AVOID_POWER_BOOST = 5
+AVOID_GREEN_TARGET_ANGLE = -40  # 緑オブジェクト回避時の目標線角度（度）
+AVOID_RED_TARGET_ANGLE = 40  # 赤オブジェクト回避時の目標線角度（度）
+AVOID_STEERING_MAX = 37  # オブジェクト回避で許可する最大操舵角（度）
+AVOID_WALL_STEERING_ANGLE = 30.0  # 黒壁を検知したときの固定操舵角（度）
+AVOID_KP = 1.5  # 目標線の角度ずれに対する比例補正の強さ
+AVOID_KD = 0.2  # 目標線の角度変化に対する微分補正の強さ
+AVOID_GO_STRAIGHT_BELOW_Y = 200  # 物体中心がこのY座標より下なら直進する
+AVOID_WALL_STEERING_UPDATE_MIN = 0.5  # 壁回避の操舵を更新する最小角度差（度）
+AVOID_POWER_BOOST_STEERING_THRESHOLD = 30  # パワーを上げる操舵角の境界値（度）
+AVOID_POWER_BOOST = 5  # 急操舵時にモーターパワーへ加える値
 
 # 後退確認
-BACK_CHECK_AREA_THRESHOLD = 2000
-BACK_CHECK_SECONDS = 1.25
+BACK_CHECK_AREA_THRESHOLD = 2000  # 後退が必要と判定する物体の最小面積
+BACK_CHECK_SECONDS = 1.25  # 後退を継続する秒数
 
 # 青線の検出判定
-BLUE_LINE_COOLDOWN_SECONDS = 2.5
-BLUE_LINE_CROSSING_TARGET = 4
-BLUE_LINE_LOST_CONFIRM_SECONDS = 1.0
-BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE = 1.5
+BLUE_LINE_COOLDOWN_SECONDS = 2.5  # 同じ青線の二重計上を防ぐ無視時間（秒）
+BLUE_LINE_CROSSING_TARGET = 4  # 終了判定を開始する青線の目標通過回数
+BLUE_LINE_LOST_CONFIRM_SECONDS = 1.0  # direction=0で青線消失を確定する秒数
+BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE = 1.5  # direction=1で青線消失を確定する秒数
 
 # 障害物競技中に常時点灯する後方ライト
-REAR_LIGHT_PIN = 21
+REAR_LIGHT_PIN = 21  # 後方ライトを接続するGPIO番号（BCM）
 
 detector = PiColorDetector(enable_recording=True, detect_boundary_enabled=False)
 from newobot import dc_motor, set_angle, stop, cleanup
@@ -107,16 +99,6 @@ def drive_along_wall_until_front_distance(
     finally:
         if started_lidar_here:
             lidar.stop()
-
-
-def set_boundary_detection(enabled):
-    """カメラの境界線検出を有効または無効にする。"""
-    detector.detect_boundary_enabled = enabled
-
-
-def set_object_detection(enabled):
-    """カメラの物体検出を有効または無効にする。"""
-    detector.detect_objects_enabled = enabled
 
 
 def gyro_turn(
@@ -410,66 +392,6 @@ def find_obj(
         stop()
         set_angle(0)
         raise
-
-
-def wall_straight(duty_cycle, stop_y):
-    """壁と床の境界線が水平になるようPD制御しながら前進する。
-
-    境界線の角度を0°へ近づけるように操舵する。境界線を見失った場合、
-    または境界線中央のY座標が ``stop_y`` 以上になった場合は、
-    安全な状態で停止して終了する。
-    """
-    previous_boundary_detection = detector.detect_boundary_enabled
-    previous_error = None
-    previous_time = None
-    motor_started = False
-    detector.detect_boundary_enabled = True
-
-    try:
-        while True:
-            result = detector.process_once()
-
-            # 録画スレッドに残っている、境界検出を有効にする前のフレームは
-            # 使用しない。検出設定が反映された新しいフレームを待つ。
-            if result.get("boundary_status") == "boundary: disabled":
-                continue
-
-            boundary = result.get("boundary")
-            if boundary is None:
-                return
-            if boundary["y_at_center"] >= stop_y:
-                return
-
-            if not motor_started:
-                dc_motor(duty_cycle)
-                motor_started = True
-
-            current_time = time.monotonic()
-            error = boundary["angle_deg"] - WALL_STRAIGHT_TARGET_ANGLE
-
-            if previous_error is None or previous_time is None:
-                derivative = 0.0
-            else:
-                elapsed = current_time - previous_time
-                derivative = (
-                    (error - previous_error) / elapsed
-                    if elapsed > 0.0
-                    else 0.0
-                )
-
-            steering = WALL_STRAIGHT_KP * error + WALL_STRAIGHT_KD * derivative
-            steering = max(
-                -WALL_STRAIGHT_MAX_STEERING,
-                min(WALL_STRAIGHT_MAX_STEERING, steering),
-            )
-            set_angle(steering)
-
-            previous_error = error
-            previous_time = current_time
-    finally:
-        stop()
-        set_angle(0)
-        detector.detect_boundary_enabled = previous_boundary_detection
 
 
 def avoid_obj(

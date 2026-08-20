@@ -77,111 +77,40 @@ GUIDE_BOX_HEIGHT = 240
 
 COLOR_RULES = {
     "red": {
-        "max_distance": 14.0,
-        "distance_margin": 2.5,
-        "min_saturation": 100,
-        "min_value": 40,
-        "value_weight": 0.6,
         "hue_ranges": ((0, 8), (170, 179)),
+        "saturation_range": (100, 255),
+        "value_range": (40, 255),
     },
     "green": {
-        "max_distance": 12.5,
-        "distance_margin": 1.6,
-        "min_saturation": 35,
-        "min_value": 22,
-        "value_weight": 0.45,
-        "hue_margin": 6,
+        # 以前のgreen.npyから計算されていた範囲（中心H=61、前後6）。
+        "hue_ranges": ((55, 67),),
+        "saturation_range": (35, 255),
+        "value_range": (22, 255),
     },
     # RGB (255, 0, 255) は OpenCV の HSV では H=150 になる。
     # カメラの色ずれも吸収できるよう、前後に余裕を持たせて検出する。
     "magenta": {
         # 黒い壁に映る暗い反射を除外しつつ、遠方の実物は小面積でも残す。
-        "min_saturation": 90,
-        "min_value": 60,
         "hue_ranges": ((138, 172),),
+        "saturation_range": (90, 255),
+        "value_range": (60, 255),
         "kernel_size": 3,
     },
 }
 
 
-def load_hsv_samples(sample_dir: Path, color: str):
-    path = sample_dir / f"{color}.npy"
-    if not path.exists():
-        raise FileNotFoundError(f"HSVサンプルが見つかりません: {path}")
-
-    data = np.load(path).astype(np.float32)
-    if data.ndim != 2 or data.shape[1] != 3:
-        raise ValueError(f"HSVサンプルの形式が不正です: {path}")
-    return data
-
-
-def build_model(samples):
-    hue = samples[:, 0].astype(np.float32)
-    hue_angles = hue / 180.0 * 2.0 * np.pi
-    hue_sin_mean = np.mean(np.sin(hue_angles))
-    hue_cos_mean = np.mean(np.cos(hue_angles))
-    hue_mean_angle = np.arctan2(hue_sin_mean, hue_cos_mean)
-    if hue_mean_angle < 0:
-        hue_mean_angle += 2.0 * np.pi
-    circular_hue_mean = hue_mean_angle / (2.0 * np.pi) * 180.0
-
-    linear_hue_mean = np.mean(hue)
-    linear_hue_std = np.std(hue)
-    circular_hue_diff = hue_distance(hue, circular_hue_mean)
-    circular_hue_std = np.std(circular_hue_diff)
-
-    if circular_hue_std < linear_hue_std and circular_hue_std < 20.0:
-        hue_mean = circular_hue_mean
-        hue_std = circular_hue_std
-    else:
-        hue_mean = linear_hue_mean
-        hue_std = linear_hue_std
-
-    return {
-        "mean": np.array([hue_mean, np.mean(samples[:, 1]), np.mean(samples[:, 2])], dtype=np.float32),
-        "std": np.clip(
-            np.array([hue_std, np.std(samples[:, 1]), np.std(samples[:, 2])], dtype=np.float32),
-            [4.0, 18.0, 18.0],
-            [40.0, 80.0, 80.0],
-        ),
-    }
-
-
-def hue_distance(hue_channel, center):
-    diff = np.abs(hue_channel.astype(np.float32) - float(center))
-    return np.minimum(diff, 180.0 - diff)
-
-
-def class_distance(hsv, model, value_weight=1.0):
-    hue_diff = hue_distance(hsv[:, :, 0], model["mean"][0]) / model["std"][0]
-    sat_diff = (hsv[:, :, 1].astype(np.float32) - model["mean"][1]) / model["std"][1]
-    val_diff = (hsv[:, :, 2].astype(np.float32) - model["mean"][2]) / model["std"][2]
-    return hue_diff * hue_diff + sat_diff * sat_diff + value_weight * val_diff * val_diff
-
-
-def create_mask(hsv, color_name, color_model, other_models):
+def create_mask(hsv, color_name):
     rule = COLOR_RULES[color_name]
-    saturation_min = int(rule["min_saturation"])
-    value_min = int(rule["min_value"])
-
-    if "hue_ranges" in rule:
-        hue_ranges = rule["hue_ranges"]
-    else:
-        hue_center = float(color_model["mean"][0])
-        hue_margin = float(rule["hue_margin"])
-        lower = hue_center - hue_margin
-        upper = hue_center + hue_margin
-        if lower < 0:
-            hue_ranges = ((0, int(upper)), (int(180 + lower), 179))
-        elif upper > 179:
-            hue_ranges = ((0, int(upper - 180)), (int(lower), 179))
-        else:
-            hue_ranges = ((int(lower), int(upper)),)
+    saturation_min, saturation_max = rule["saturation_range"]
+    value_min, value_max = rule["value_range"]
 
     mask = None
-    for hue_lower, hue_upper in hue_ranges:
+    for hue_lower, hue_upper in rule["hue_ranges"]:
         lower = np.array([hue_lower, saturation_min, value_min], dtype=np.uint8)
-        upper = np.array([hue_upper, 255, 255], dtype=np.uint8)
+        upper = np.array(
+            [hue_upper, saturation_max, value_max],
+            dtype=np.uint8,
+        )
         range_mask = cv2.inRange(hsv, lower, upper)
         mask = range_mask if mask is None else cv2.bitwise_or(mask, range_mask)
 
@@ -776,7 +705,6 @@ class PiColorDetector:
         self.camera_num = camera_num
         self.camera = None
         self.preview = None
-        self.models = {}
         self._recording_writer = None
         self._capture_thread = None
         self._capture_running = False
@@ -791,19 +719,7 @@ class PiColorDetector:
         # 画面の下1/3は物体検出の対象外にする。
         self.ignore_below_y = DEFAULT_IGNORE_BELOW_Y
 
-    def load_models(self):
-        red_samples = load_hsv_samples(self.sample_dir, "red")
-        green_samples = load_hsv_samples(self.sample_dir, "green")
-        other_samples = load_hsv_samples(self.sample_dir, "other")
-
-        self.models = {
-            "red": build_model(red_samples),
-            "green": build_model(green_samples),
-            "other": build_model(other_samples),
-        }
-
     def start(self):
-        self.load_models()
         try:
             self.camera = Picamera2(self.camera_num)
         except IndexError as exc:
@@ -924,9 +840,9 @@ class PiColorDetector:
         blue_line, blue_line_mask = detect_blue_line(frame)
         if self.detect_objects_enabled:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            red_mask = create_mask(hsv, "red", self.models["red"], [self.models["green"], self.models["other"]])
-            green_mask = create_mask(hsv, "green", self.models["green"], [self.models["red"], self.models["other"]])
-            magenta_mask = create_mask(hsv, "magenta", None, [])
+            red_mask = create_mask(hsv, "red")
+            green_mask = create_mask(hsv, "green")
+            magenta_mask = create_mask(hsv, "magenta")
             red_mask[:GUIDE_TOP_LINE_Y, :] = 0
             green_mask[:GUIDE_TOP_LINE_Y, :] = 0
             magenta_mask[:GUIDE_TOP_LINE_Y, :] = 0
