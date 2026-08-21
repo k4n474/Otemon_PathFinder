@@ -18,27 +18,49 @@ from lidar_wall_follow import WallPIDController
 from newobot import cleanup, dc_motor, set_angle, stop
 
 
+# 壁トレース中に追従する壁との目標距離（mm）。
 TARGET_DISTANCE = 250
+# 通常走行時のDCモーター出力。
 MOTOR_SPEED = 40
+# 旋回時のDCモーター出力。
 TURN_MOTOR_SPEED = 44
+# 壁との距離誤差に対するPID制御の比例ゲイン。
 STEERING_KP = 0.1
+# 壁との距離誤差に対するPID制御の積分ゲイン。
 STEERING_KI = 0.01
+# 壁との距離誤差に対するPID制御の微分ゲイン。
 STEERING_KD = 0.1
+# 壁トレース中に許可するステアリング角度の上限（度）。
 MAX_STEERING_ANGLE = 30.0
+# PID制御で積分値が過剰に蓄積しないための上限。
 INTEGRAL_LIMIT = 800
+# LiDAR取得と走行制御を繰り返す間隔（秒）。
 INTERVAL = 0.1
+# 前方の壁を検出して旋回を開始する距離（mm）。
 FRONT_WALL_TURN_DISTANCE = 360
+# 前方の壁を検出して旋回方向と角度を事前決定する距離（mm）。
 FRONT_WALL_PLAN_DISTANCE = 800
+# 旋回時に固定するステアリング角度の大きさ（度）。
 TURN_STEERING_ANGLE = 40
+# 壁から算出した旋回角度を実際の目標角度へ補正する減算値（度）。
 TURN_ANGLE_REDUCTION = 5.0
+# 誤検出による小さな旋回を無視するための最小目標角度（度）。
 MIN_TURN_TARGET_ANGLE = 40.0
+# 旋回処理を安全のため強制終了するまでの制限時間（秒）。
 TURN_TIMEOUT = 20.0
+# 旋回終了後に車体を停止させておく時間（秒）。
 TURN_END_STOP_SECONDS = 1.0
+# 追従する左右の壁を長さで選ぶ際に集計する測定回数。
 TRACE_SELECTION_SAMPLES = 0
+# 3周完了とみなす旋回回数。
 MAX_TURN_COUNT = 12
+# 最終旋回後、前方距離による停止判定を始めるまでの走行時間（秒）。
 FINAL_RUN_STRAIGHT_SECONDS = 2.0
+# 3周完了後に走行を終了する前方壁までの距離（mm）。
 FINAL_STOP_FRONT_DISTANCE = 1500
+# 旋回後に左右・前方の壁の役割を固定し直すまでの待機時間（秒）。
 WALL_ROLE_LOCK_DELAY = 2.0
+# 旋回直後の前方壁を次の壁として誤検出しないための無視時間（秒）。
 FRONT_WALL_IGNORE_AFTER_TURN_SECONDS = 2.0
 
 
@@ -330,8 +352,6 @@ PULSE_LED_BRIGHT_DUTY = 100.0
 PULSE_LED_DIM_DUTY = 40.0
 PULSE_LED_PWM_FREQUENCY = 200
 LED_UPDATE_INTERVAL = 0.01
-START_FADE_SECONDS = (1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2)
-START_FULL_BRIGHT_SECONDS = 2.0
 COMPLETE_SIGNAL_SECONDS = 4.0
 COMPLETE_FADE_SECONDS = 1.0
 COMPLETE_BUZZER_INTERVAL = 0.2
@@ -455,42 +475,6 @@ def signal_run_complete():
         GPIO.output(complete_leds, GPIO.LOW)
 
 
-def signal_run_start():
-    """全LEDのフェードを加速させ、全点灯後に走行開始を通知する。"""
-
-    start_leds = (*PULSE_LEDS, BLINK_LED)
-    start_pwms = [
-        GPIO.PWM(pin, PULSE_LED_PWM_FREQUENCY)
-        for pin in start_leds
-    ]
-    for pwm in start_pwms:
-        pwm.start(100.0)
-
-    try:
-        for fade_seconds in START_FADE_SECONDS:
-            fade_started_at = time.monotonic()
-            while True:
-                elapsed = time.monotonic() - fade_started_at
-                if elapsed >= fade_seconds:
-                    break
-
-                duty = 100.0 * (1.0 - elapsed / fade_seconds)
-                for pwm in start_pwms:
-                    pwm.ChangeDutyCycle(duty)
-                time.sleep(LED_UPDATE_INTERVAL)
-
-            for pwm in start_pwms:
-                pwm.ChangeDutyCycle(0.0)
-
-        for pwm in start_pwms:
-            pwm.ChangeDutyCycle(100.0)
-        time.sleep(START_FULL_BRIGHT_SECONDS)
-    finally:
-        for pwm in start_pwms:
-            pwm.stop()
-        GPIO.output(start_leds, GPIO.HIGH)
-
-
 def run():
     lidar = LidarReader()
     led_stop_event = Event()
@@ -550,8 +534,6 @@ def run():
             "Live Viewer API: "
             "http://<Raspberry PiのIP>:5000/api/points"
         )
-        print("起動ライト演出を開始します")
-        signal_run_start()
         led_thread.start()
         print("走行を開始します")
         previous_time = time.monotonic()

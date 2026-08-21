@@ -43,7 +43,7 @@ AVOID_KD = 0.2  # 目標線の角度変化に対する微分補正の強さ
 AVOID_GO_STRAIGHT_BELOW_Y = 200  # 物体中心がこのY座標より下なら直進する
 AVOID_WALL_STEERING_UPDATE_MIN = 0.5  # 壁回避の操舵を更新する最小角度差（度）
 AVOID_POWER_BOOST_STEERING_THRESHOLD = 30  # パワーを上げる操舵角の境界値（度）
-AVOID_POWER_BOOST = 5  # 急操舵時にモーターパワーへ加える値
+AVOID_POWER_BOOST = 15  # 急操舵時にモーターパワーへ加える値
 
 # 後退確認
 BACK_CHECK_AREA_THRESHOLD = 2000  # 後退が必要と判定する物体の最小面積
@@ -668,7 +668,8 @@ def obstacle_challenge_np(power):
 
 
 def main():
-    obstacle_challenge_np(62)
+    button_sleep()
+    obstacle_challenge_np(50)
     stop()
     # dc_motor(35)
     # time.sleep(1)
