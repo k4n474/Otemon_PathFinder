@@ -46,6 +46,10 @@ Unlike a conventional microcontroller, the Raspberry Pi is a compact computer th
 
 At the beginning of development, we used a **Raspberry Pi 4**. However, image processing required more computational power than expected, making real-time control difficult in some situations. After upgrading to the Raspberry Pi 5, image processing became significantly faster, resulting in much more stable driving performance.
 
+We also adopted an **RP2040** as a sub-controller for motor control.
+
+Because the Raspberry Pi 5 runs Linux, when we command it (for example, changing PWM values or reading encoders in Python), many processes such as LiDAR processing, camera processing, and communication are running simultaneously. As a result, **the processing timing can drift slightly**. Considering this and maintainability, we decided to offload motor control to the RP2040.
+
 ## LiDAR
 
 Our robot uses a **LiDAR** for wall detection, distance measurement, and wall following.
@@ -53,6 +57,9 @@ Our robot uses a **LiDAR** for wall detection, distance measurement, and wall fo
 We initially considered using ultrasonic sensors. However, ultrasonic sensors can only measure distance in a single direction, whereas the LiDAR can obtain distance information from almost the entire surrounding area, although part of its field of view is blocked by components such as the Raspberry Pi. This allows the robot to detect obstacles in front while simultaneously measuring the distances to both side walls, enabling more accurate self-localization.
 
 One of the greatest challenges during development was designing an algorithm capable of accurately detecting walls using LiDAR point cloud data. In addition, because the robot must process a large amount of distance data in real time, optimizing the processing speed was also a major challenge. Through repeated testing and refinement, we continuously improved both the algorithm and the software until the current system was completed.
+
+Currently, for each full rotation of LiDAR data (angle and distance), we remove points behind the robot and points with abnormal distances, and convert points within 3 m into planar coordinates. Then, using RANSAC, we search for line-shaped point sets: we randomly choose two points to form a line, collect points within 50 mm of that line, and repeat this 100 times, selecting the line that gathers the most points. We then refine the line using the gathered points, and treat a segment as a wall if it has at least 10 points and a length of at least 100 mm. Up to four walls are detected. If the gap between points exceeds 250 mm, we treat them as separate clusters.
+Among the detected walls, we select up to the three walls with the highest number of points and classify them into right wall / front wall / left wall based on the direction of the perpendicular from the LiDAR to the wall. If three walls are available, we assign right–front–left in order of angle. If only one or two are available, we assign roles based on which reference direction they are closest to. However, to be used as a front wall, the wall must be at least 500 mm long. Distances to walls are computed using the perpendicular distance from the LiDAR to the wall line, and we follow whichever side wall is longer. This recognition is performed every rotation, and we do not build a map by accumulating past point clouds.
 
 ![LiDAR](images/Other_images/LiDAR_screen.png)
 
@@ -62,26 +69,34 @@ At the beginning of development, we used a **HuskyLens** because it allowed us t
 
 We use a **Raspberry Pi Camera Module 3 Wide** because of its excellent compatibility with the Raspberry Pi and its ability to capture images at high speed. Initially, we used the standard **Raspberry Pi Camera Module 3**, but its horizontal field of view was only about **66°**, causing obstacles to occasionally move outside the camera image. As a result, reliable obstacle avoidance was difficult. After replacing it with the **Camera Module 3 Wide**, the horizontal field of view increased to approximately **102°**, allowing the robot to detect obstacles much more reliably.
 
-The captured RGB image is first converted into the **HSV color space**. HSV consists of **Hue, Saturation, and Value,** and is less affected by changes in lighting conditions than RGB. This enables the robot to distinguish red and green objects more reliably by using hue information.
+The captured RGB image is first converted into the **HSV color space**. HSV consists of **Hue (color), Saturation, and Value (brightness)**, and is less affected by changes in lighting conditions than RGB. This enables the robot to distinguish red and green objects more reliably by using hue information.
 
 <p align="center">
-  <img src="images/Other_images/RGB_image.png" alt="Robot9" width="45%">
-  <img src="images/Other_images/HSV_image.jpg" alt="Robot10" width="45%">
+  <img src="images/Other_images/RGB_image.png" alt="rgb" width="45%">
+  <img src="images/Other_images/HSV_image.jpg" alt="hsv" width="45%">
 </p>
 
-After the conversion, separate color masks are applied to the red and green objects, followed by binary thresholding to extract only the target objects. Contour detection is then performed to obtain the coordinates of the four corners of each object. These coordinates are used to determine each object’s position and color, and the resulting information is used for navigation.
+After the conversion, separate color masks are applied to the red and green objects, followed by binary thresholding to extract only the target objects. Contour detection is then performed to obtain the coordinates of the four corners of each object. However, this alone may also detect red objects or blue objects outside the field. To address this, we detect the court region using the camera and treat only objects that overlap with the court area as obstacle objects. Using those object coordinates, we determine the objects’ positions and colors, and use the resulting information for navigation.Also, since part of the robot appears in the camera's field of view, the program is configured to skip image recognition in that area.
 
-![Camera](images/Other_images/camera_screen.png)
+
+The court is detected using the same approach as object detection, by applying a white color mask.
+
+<p align="center">
+  <img src="images/Other_images/detect_off.png" alt="off" width="45%">
+  <img src="images/Other_images/detect_on.png" alt="on" width="45%">
+</p>
+
+In addition, the camera recognizes a blue line to count the number of laps.
+
+![Camera](images/Other_images/blue_image.png)
 
 ## Chassis
 
 Most of the robot’s mechanical components, excluding electronic parts, were designed by our team and manufactured using **3D printers**. This allowed us to create custom parts that would have been difficult or impossible to produce using commercially available components, enabling a structure optimized specifically for our robot.
 
-We selected **PETG** as the printing material. Although PLA is easy to print, its durability is limited. ABS provides excellent strength, but it is prone to warping and requires more demanding printing conditions. PETG offers an excellent balance between printability and mechanical strength, making it the most suitable material for our robot.
+We selected **ABS** as the printing material. At the beginning of development, we used PLA and PETG because they were easier to print, but we decided to switch to ABS due to durability concerns.
 
-We use both a **Bambu Lab A1** and a **Bambu Lab X2D** for manufacturing. At the beginning of development, all parts were produced using only the A1. However, because nearly all of the robot’s mechanical components are 3D printed, a single printer required an excessive amount of production time. Therefore, we introduced the X2D, allowing multiple parts to be printed simultaneously.
-
-Compared with the A1, the X2D provides higher printing speed and better print quality, enabling us to manufacture high-quality components in a shorter amount of time. We currently use both printers according to the requirements of each part.
+We use a **Bambu Lab X2D** for manufacturing. At the beginning of development, all parts were produced using a **Bambu Lab A1**. However, the A1 could not print ABS, so we introduced the X2D to enable ABS printing. In addition, the **Bambu Lab X2D** improved printing speed and quality.
 
 ## Steering Mechanism
 
@@ -97,16 +112,22 @@ A **differential gear** is also installed on the rear axle. During cornering, it
 
 ![Gear](images/Robot_images/gear_image.png)
 
-
 ## Electrical System
 
 To prevent voltage drops and electrical noise generated by the drive motors from affecting the control system, our robot uses **separate power supplies for the drive system and the control system.**
 
 The drive motors are powered by a battery pack consisting of **three 18650 lithium-ion batteries connected in series**. Since the fully charged battery voltage is approximately **12 V**, the motors are powered directly without additional voltage conversion.
 
+When the voltage drops below 11 V, the robot’s movement becomes weaker. Therefore, we installed a voltmeter module on the robot to monitor the voltage.
+
+In addition, to allow the robot to stop immediately in dangerous situations (for example, when it starts malfunctioning), we added an emergency stop button to the motor power circuit so that the robot can be stopped physically.
+
+![Stop_button](images/Robot_images/button_image.jpeg)
+
 The steering servo is powered through a **buck converter (DC-DC converter)**, which steps the voltage down to **5 V** and provides a stable power supply.
 
-The Raspberry Pi is powered by a **5,000 mAh USB Power Delivery (PD) power ban**k. Separating the motor and control power supplies reduces malfunctions caused by voltage fluctuations and electrical noise, significantly improving the overall stability of the robot.
+
+The Raspberry Pi is powered by a **5,000 mAh USB Power Delivery (PD) power bank**. Separating the motor and control power supplies reduces malfunctions caused by voltage fluctuations and electrical noise, significantly improving the overall stability of the robot.
 
 To simplify wiring as additional functions were added, we also designed and manufactured a **custom Raspberry Pi HAT board**. This board organizes the wiring, simplifies assembly and maintenance, and improves the overall maintainability of the robot.
 
@@ -116,20 +137,22 @@ To simplify wiring as additional functions were added, we also designed and manu
 
 In the **Open Challenge**, the robot navigates primarily using **LiDAR**. As described earlier, we selected LiDAR because it provides distance information from almost the entire surrounding area, allowing the robot to perceive its environment with high accuracy.
 
-During operation, the robot continuously measures the distances to the front wall and both side walls using the LiDAR. The distances to the side walls are used as the input for a **PID controller**, enabling the robot to maintain a stable position near the center of the course. In addition, the robot’s heading is continuously corrected using a **gyroscope**, allowing it to maintain a stable orientation while driving.
+During operation, the robot continuously measures the distances to the front wall and both side walls using the LiDAR. The distances to the side walls are used as the input for a **PID controller**, enabling the robot to maintain a stable position near the center of the course. In addition, at the start the robot detects the left and right walls using LiDAR, and leveraging the characteristic that the field’s inner wall is shorter than the outer wall, it decides which wall to follow based on wall length.
 
-When the distance to the front wall falls below a predefined threshold, the robot determines that it has reached a corner. It then performs a **90-degree turn** while continuously monitoring its heading with the gyroscope. This feedback-based control allows the robot to achieve consistent and accurate turns.
-
-The driving direction is determined by monitoring changes in the distances to the side walls. If the distance to one side suddenly increases, the robot determines that the wall on that side has ended and turns in that direction. This method enables the robot to adapt automatically to different course layouts and driving directions used in the competition.
+Just before a corner, when the distance to the front wall falls below a predefined threshold, the robot determines that it has reached the corner. It then measures the angle of the front wall with LiDAR and determines (with a gyroscope) the angle that becomes parallel to the front wall while performing the turn. This feedback-based control allows the robot to achieve stable and accurate cornering.
 
 ## Obstacle Challenge
 
 In the **Obstacle Challenge**, the robot uses a **Raspberry Pi Camera** to detect obstacles and control its movement accordingly.
 
-First, the robot detects the contours of all visible objects in the camera image and obtains the coordinates of their four corners together with their colors (**red** or **green**). When multiple objects are detected simultaneously, the object that appears lowest in the image is regarded as the closest obstacle and is given the highest priority for avoidance.
+The obstacle-avoidance loop begins by checking whether an object is detected by the camera. If no object is detected, the robot repeatedly runs `find_obj` until an object is found. `find_obj` basically steers in the same direction as the lap direction while moving forward until an object is detected. However, if a wall is detected using the line at the bottom of the camera image, it interrupts this behavior and steers away from the wall until the wall is no longer detected.
 
-During obstacle avoidance, the robot passes **to the left of red obstacles** and **to the right of green obstacles**. The steering angle is continuously calculated so that the center of the detected object moves toward a predefined target position in the camera image.
+Once an object is detected, the robot starts `avoid_obj` to avoid the closest object. The closest object is defined as the one appearing lowest in the image.
 
-Once the center of the object passes a predefined reference position, the robot determines that the obstacle has been successfully cleared. The steering is then gradually returned to the neutral position, allowing the robot to smoothly return to the center of the course and continue driving straight.
+In `avoid_obj`, the robot avoids **red** objects by going to the right and **green** objects by going to the left. If the object being avoided disappears from the camera image and no other objects are detected, the robot returns to `find_obj`. If other objects are still detected, the robot continues `avoid_obj`, and the next closest object becomes the new target without leaving the function.
 
-By continuously repeating this process, the robot is able to avoid multiple obstacles in sequence while maintaining stable and reliable navigation around the course.
+For example, if the object is green, the robot draws a line from the bottom-right corner of the image to the center of the green object, and uses PD control on the steering so that the angle inside that line matches a preset value. During `avoid_obj`, another line is drawn from the bottom-right corner to a point slightly left of the object’s left edge (object width × 3 px). This line corresponds to the path of the robot’s right edge while avoiding the object. If this line overlaps with a wall, the robot would collide with the wall if it continued, so it temporarily stops the avoidance PID control and steers left until the wall no longer overlaps with the wall-detection line. (For red objects, the left/right behavior is reversed.)
+
+![Obstacle_image](images/Other_images/Obstacle_image.png)
+
+Lap counting is done by counting how many times the blue line is detected. When the blue line transitions from detected to not detected, the lap count is incremented by 1. For a few seconds after detecting the blue line, detections are ignored to prevent false double-counting when the same line briefly disappears and reappears in the camera view.
