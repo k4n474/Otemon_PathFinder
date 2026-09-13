@@ -44,7 +44,7 @@ To accurately recognize objects, the robot must process camera images while simu
 
 Unlike a conventional microcontroller, the Raspberry Pi is a compact computer that runs Linux. As a result, it is less suitable for applications requiring strict real-time control, such as motor control, and it also consumes more power. However, its powerful processing capability allows it to handle computationally intensive tasks, including image processing and LiDAR point cloud processing. Since these functions are essential for our robot, we concluded that the Raspberry Pi was the most suitable controller.
 
-At the beginning of development, we used a **Raspberry Pi 4**. However, image processing required more computational power than expected, making real-time control difficult in some situations. After upgrading to the Raspberry Pi 5, image processing became significantly faster, resulting in much more stable driving performance.
+At the beginning of development, we used a **Raspberry Pi 4**. However, image processing required more computational power than expected, making real-time control difficult in some situations. After upgrading to the Raspberry Pi 5(Jun. 2026), image processing became significantly faster, resulting in much more stable driving performance.
 
 We also adopted an **RP2040** as a sub-controller for motor control.
 
@@ -67,7 +67,7 @@ Among the detected walls, we select up to the three walls with the highest numbe
 
 At the beginning of development, we used a **HuskyLens** because it allowed us to implement object recognition relatively easily. However, we found limitations in both recognition accuracy and flexibility, so we decided to develop our own image recognition program from scratch.
 
-We use a **Raspberry Pi Camera Module 3 Wide** because of its excellent compatibility with the Raspberry Pi and its ability to capture images at high speed. Initially, we used the standard **Raspberry Pi Camera Module 3**, but its horizontal field of view was only about **66°**, causing obstacles to occasionally move outside the camera image. As a result, reliable obstacle avoidance was difficult. After replacing it with the **Camera Module 3 Wide**, the horizontal field of view increased to approximately **102°**, allowing the robot to detect obstacles much more reliably.
+We use a **Raspberry Pi Camera Module 3 Wide** because of its excellent compatibility with the Raspberry Pi and its ability to capture images at high speed. Initially, we used the standard **Raspberry Pi Camera Module 3**, but its horizontal field of view was only about **66°**, causing obstacles to occasionally move outside the camera image. As a result, reliable obstacle avoidance was difficult. After replacing it with the **Camera Module 3 Wide**(Jun. 2026), the horizontal field of view increased to approximately **102°**, allowing the robot to detect obstacles much more reliably.
 
 The captured RGB image is first converted into the **HSV color space**. HSV consists of **Hue (color), Saturation, and Value (brightness)**, and is less affected by changes in lighting conditions than RGB. This enables the robot to distinguish red and green objects more reliably by using hue information.
 
@@ -76,7 +76,7 @@ The captured RGB image is first converted into the **HSV color space**. HSV cons
   <img src="images/Other_images/HSV_image.jpg" alt="hsv" width="45%">
 </p>
 
-After the conversion, separate color masks are applied to the red and green objects, followed by binary thresholding to extract only the target objects. Contour detection is then performed to obtain the coordinates of the four corners of each object. However, this alone may also detect red objects or blue objects outside the field. To address this, we detect the court region using the camera and treat only objects that overlap with the court area as obstacle objects. Using those object coordinates, we determine the objects’ positions and colors, and use the resulting information for navigation.Also, since part of the robot appears in the camera's field of view, the program is configured to skip image recognition in that area.
+After the conversion, separate color masks are applied to the red and green objects, followed by binary thresholding to extract only the target objects. Contour detection is then performed to obtain the coordinates of the four corners of each object. However, with this approach alone, the system also recognized red and blue objects outside the coat. Therefore, we modified the system so that it would recognize the coat using the camera and treat only objects overlapping that area as obstacles(Aug. 2026).Using those object coordinates, we determine the objects’ positions and colors, and use the resulting information for navigation.Also, since part of the robot appears in the camera's field of view, the program is configured to skip image recognition in that area.
 
 
 The court is detected using the same approach as object detection, by applying a white color mask.
@@ -94,21 +94,21 @@ In addition, the camera recognizes a blue line to count the number of laps.
 
 Most of the robot’s mechanical components, excluding electronic parts, were designed by our team and manufactured using **3D printers**. This allowed us to create custom parts that would have been difficult or impossible to produce using commercially available components, enabling a structure optimized specifically for our robot.
 
-We selected **ABS** as the printing material. At the beginning of development, we used PLA and PETG because they were easier to print, but we decided to switch to ABS due to durability concerns.
+We selected **ABS** as the printing material. At the beginning of development, we used PLA and PETG because they were easier to print, but we decided to switch to ABS due to durability concerns(Aug. 2026).
 
-We use a **Bambu Lab X2D** for manufacturing. At the beginning of development, all parts were produced using a **Bambu Lab A1**. However, the A1 could not print ABS, so we introduced the X2D to enable ABS printing. In addition, the **Bambu Lab X2D** improved printing speed and quality.
+We use a **Bambu Lab X2D** for manufacturing. At the beginning of development, all parts were produced using a **Bambu Lab A1**. However, the A1 could not print ABS, so we introduced the X2D to enable ABS printing(Jul. 2026). In addition, the **Bambu Lab X2D** improved printing speed and quality.
 
 ## Steering Mechanism
 
 Initially, our robot used a conventional steering mechanism. However, it could not achieve sufficient turning performance when negotiating sharp corners.
 
-To improve cornering performance, we adopted an **Ackermann steering mechanism** for the front wheels. This allows each front wheel to follow the appropriate turning radius while sharing the same turning center, reducing tire slip and enabling smoother cornering.
+To improve cornering performance, we adopted an **Ackermann steering mechanism** for the front wheels.(Jun. 2026) This allows each front wheel to follow the appropriate turning radius while sharing the same turning center, reducing tire slip and enabling smoother cornering.
 
 ![Ackermann](images/Robot_images/ackermann_image.png)
 
 In addition, we selected **high-torque drive motors**, providing sufficient driving force even under heavy loads and ensuring stable vehicle movement.
 
-A **differential gear** is also installed on the rear axle. During cornering, it absorbs the rotational speed difference between the left and right wheels, reducing mechanical stress on the tires and enabling smoother turns.
+A **differential gear** is also installed on the rear axle.(Jun. 2026) During cornering, it absorbs the rotational speed difference between the left and right wheels, reducing mechanical stress on the tires and enabling smoother turns.
 
 ![Gear](images/Robot_images/gear_image.png)
 
@@ -118,9 +118,9 @@ To prevent voltage drops and electrical noise generated by the drive motors from
 
 The drive motors are powered by a battery pack consisting of **three 18650 lithium-ion batteries connected in series**. Since the fully charged battery voltage is approximately **12 V**, the motors are powered directly without additional voltage conversion.
 
-When the voltage drops below 11 V, the robot’s movement becomes weaker. Therefore, we installed a voltmeter module on the robot to monitor the voltage.
+When the voltage drops below 11 V, the robot’s movement becomes weaker. Therefore, we installed a voltmeter module on the robot to monitor the voltage(Sep. 2026).
 
-In addition, to allow the robot to stop immediately in dangerous situations (for example, when it starts malfunctioning), we added an emergency stop button to the motor power circuit so that the robot can be stopped physically.
+In addition, to allow the robot to stop immediately in dangerous situations (for example, when it starts malfunctioning), we added an emergency stop button to the motor power circuit so that the robot can be stopped physically(Sep. 2026).
 
 ![Stop_button](images/Robot_images/button_image.jpeg)
 
@@ -129,7 +129,7 @@ The steering servo is powered through a **buck converter (DC-DC converter)**, wh
 
 The Raspberry Pi is powered by a **5,000 mAh USB Power Delivery (PD) power bank**. Separating the motor and control power supplies reduces malfunctions caused by voltage fluctuations and electrical noise, significantly improving the overall stability of the robot.
 
-To simplify wiring as additional functions were added, we also designed and manufactured a **custom Raspberry Pi HAT board**. This board organizes the wiring, simplifies assembly and maintenance, and improves the overall maintainability of the robot.
+To simplify wiring as additional functions were added, we also designed and manufactured a **custom Raspberry Pi HAT board**(Jun. 2026). This board organizes the wiring, simplifies assembly and maintenance, and improves the overall maintainability of the robot.
 
 # Software
 
