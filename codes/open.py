@@ -11,7 +11,6 @@ from algorithm import (
     detect_front_and_side_walls,
     detect_walls
 )
-from button import button_sleep
 from gyro import close_gyro, get_angle, reset_angle
 from lidar_read import LidarReader
 from lidar_wall_follow import WallPIDController
@@ -19,17 +18,17 @@ from newobot import cleanup, dc_motor, set_angle, stop
 
 
 # 壁トレース中に追従する壁との目標距離（mm）。
-TARGET_DISTANCE = 250
+TARGET_DISTANCE = 280
 # 通常走行時のDCモーター出力。
-MOTOR_SPEED = 40
+MOTOR_SPEED = 42
 # 旋回時のDCモーター出力。
-TURN_MOTOR_SPEED = 44
+TURN_MOTOR_SPEED = 50
 # 壁との距離誤差に対するPID制御の比例ゲイン。
 STEERING_KP = 0.1
 # 壁との距離誤差に対するPID制御の積分ゲイン。
 STEERING_KI = 0.01
 # 壁との距離誤差に対するPID制御の微分ゲイン。
-STEERING_KD = 0.1
+STEERING_KD = 0.06
 # 壁トレース中に許可するステアリング角度の上限（度）。
 MAX_STEERING_ANGLE = 30.0
 # PID制御で積分値が過剰に蓄積しないための上限。
@@ -37,11 +36,11 @@ INTEGRAL_LIMIT = 800
 # LiDAR取得と走行制御を繰り返す間隔（秒）。
 INTERVAL = 0.1
 # 前方の壁を検出して旋回を開始する距離（mm）。
-FRONT_WALL_TURN_DISTANCE = 360
+FRONT_WALL_TURN_DISTANCE = 380
 # 前方の壁を検出して旋回方向と角度を事前決定する距離（mm）。
 FRONT_WALL_PLAN_DISTANCE = 800
 # 旋回時に固定するステアリング角度の大きさ（度）。
-TURN_STEERING_ANGLE = 40
+TURN_STEERING_ANGLE = 31
 # 壁から算出した旋回角度を実際の目標角度へ補正する減算値（度）。
 TURN_ANGLE_REDUCTION = 5.0
 # 誤検出による小さな旋回を無視するための最小目標角度（度）。
@@ -57,7 +56,7 @@ MAX_TURN_COUNT = 12
 # 最終旋回後、前方距離による停止判定を始めるまでの走行時間（秒）。
 FINAL_RUN_STRAIGHT_SECONDS = 2.0
 # 3周完了後に走行を終了する前方壁までの距離（mm）。
-FINAL_STOP_FRONT_DISTANCE = 1500
+FINAL_STOP_FRONT_DISTANCE = 1450
 # 旋回後に左右・前方の壁の役割を固定し直すまでの待機時間（秒）。
 WALL_ROLE_LOCK_DELAY = 2.0
 # 旋回直後の前方壁を次の壁として誤検出しないための無視時間（秒）。
@@ -843,5 +842,4 @@ def run():
 
 
 if __name__ == "__main__":
-    button_sleep()
     run()

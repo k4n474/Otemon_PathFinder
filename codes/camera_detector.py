@@ -19,6 +19,7 @@ DEFAULT_SAMPLE_DIR = BASE_DIR / "samples"
 DEFAULT_RECORDING_DIR = BASE_DIR / "recordings"
 
 FRAME_SIZE = (480,270)# (320, 180)(640, 360)(960, 540)
+BOTTOM_EXCLUSION_SIZE = (64, 48)
 CAMERA_NUM = 0
 DEFAULT_IGNORE_BELOW_Y = None
 # main は処理用の軽い出力サイズ、raw は広い画角を保つためのセンサー読み出しサイズ。
@@ -38,9 +39,10 @@ TARGET_LINE_COLORS = {
     "red": (0, 0, 255),
     "green": (0, 200, 0),
 }
-BLACK_WALL_PROBE_END_X = 60#80
+BLACK_WALL_PROBE_END_X = 120
 BLACK_WALL_PROBE_WIDTH_MULTIPLIER = 2.5
 BLACK_WALL_PROBE_HALF_WIDTH = 3
+SEARCH_BLACK_WALL_PROBE_LENGTH = 75
 BLACK_WALL_VALUE_MAX = 70
 BLACK_WALL_MIN_RATIO = 0.15
 BLACK_WALL_PROBE_NORMAL_COLOR = (255, 255, 255)
@@ -69,6 +71,14 @@ BLUE_LINE_MIN_LENGTH_RATIO = 0.25
 BLUE_LINE_MIN_ELONGATION = 4.0
 BLUE_LINE_ROI_TOP_RATIO = 0.20
 BLUE_LINE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 5))
+WHITE_COURT_MAX_SATURATION = 65
+WHITE_COURT_MIN_VALUE = 150
+WHITE_COURT_MIN_AREA_RATIO = 0.08
+WHITE_COURT_BLUE_HUE_RANGE = (90, 130)
+WHITE_COURT_ORANGE_HUE_RANGE = (5, 25)
+WHITE_COURT_LINE_MIN_SATURATION = 70
+WHITE_COURT_LINE_MIN_VALUE = 65
+WHITE_COURT_OUTLINE_COLOR = (0, 255, 255)
 
 # ガイド枠はこの2つの数値を変えるだけで調整できます。
 # 左枠の左下頂点、右枠の右下頂点は必ず画面の角に固定されます。
@@ -77,8 +87,8 @@ GUIDE_BOX_HEIGHT = 240
 
 COLOR_RULES = {
     "red": {
-        "hue_ranges": ((0, 8), (170, 179)),
-        "saturation_range": (100, 255),
+        "hue_ranges": ((0, 1), (170, 179)),
+        "saturation_range": (100, 255),#(100, 255),
         "value_range": (40, 255),
     },
     "green": {
@@ -92,7 +102,7 @@ COLOR_RULES = {
     "magenta": {
         # 黒い壁に映る暗い反射を除外しつつ、遠方の実物は小面積でも残す。
         "hue_ranges": ((138, 172),),
-        "saturation_range": (90, 255),
+        "saturation_range": (100, 255),
         "value_range": (60, 255),
         "kernel_size": 3,
     },
@@ -123,6 +133,114 @@ def create_mask(hsv, color_name):
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     return mask
+
+
+def detect_white_court(frame, valid_mask=None):
+    """白い床と色付きラインを結合し、最大領域をコートとして検出する。"""
+    frame_h, frame_w = frame.shape[:2]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    white_mask = cv2.inRange(
+        hsv,
+        np.array([0, 0, WHITE_COURT_MIN_VALUE], dtype=np.uint8),
+        np.array([179, WHITE_COURT_MAX_SATURATION, 255], dtype=np.uint8),
+    )
+    blue_mask = cv2.inRange(
+        hsv,
+        np.array(
+            [
+                WHITE_COURT_BLUE_HUE_RANGE[0],
+                WHITE_COURT_LINE_MIN_SATURATION,
+                WHITE_COURT_LINE_MIN_VALUE,
+            ],
+            dtype=np.uint8,
+        ),
+        np.array([WHITE_COURT_BLUE_HUE_RANGE[1], 255, 255], dtype=np.uint8),
+    )
+    orange_mask = cv2.inRange(
+        hsv,
+        np.array(
+            [
+                WHITE_COURT_ORANGE_HUE_RANGE[0],
+                WHITE_COURT_LINE_MIN_SATURATION,
+                WHITE_COURT_LINE_MIN_VALUE,
+            ],
+            dtype=np.uint8,
+        ),
+        np.array([WHITE_COURT_ORANGE_HUE_RANGE[1], 255, 255], dtype=np.uint8),
+    )
+    # コート上の色付きラインで白領域が分断されないよう、
+    # 青線とオレンジ線もコート面として結合する。
+    mask = cv2.bitwise_or(white_mask, blue_mask)
+    mask = cv2.bitwise_or(mask, orange_mask)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    if valid_mask is not None:
+        mask = cv2.bitwise_and(mask, valid_mask)
+
+    contours, _ = cv2.findContours(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    min_area = frame_w * frame_h * WHITE_COURT_MIN_AREA_RATIO
+    candidates = [
+        contour
+        for contour in contours
+        if cv2.contourArea(contour) >= min_area
+    ]
+    if not candidates:
+        return None
+
+    contour = max(candidates, key=cv2.contourArea)
+    # コート端にある物体で白領域が隠れても、その部分をコート外にしない。
+    # コートは画面上でほぼ凸形状になるため、凸包で輪郭の欠けを補完する。
+    court_contour = cv2.convexHull(contour)
+    perimeter = cv2.arcLength(court_contour, True)
+    outline = cv2.approxPolyDP(court_contour, perimeter * 0.01, True)
+    court_mask = np.zeros((frame_h, frame_w), dtype=np.uint8)
+    cv2.drawContours(court_mask, [court_contour], -1, 255, cv2.FILLED)
+    return {
+        "contour": court_contour,
+        "outline": outline,
+        "area": int(cv2.contourArea(court_contour)),
+        "mask": court_mask,
+    }
+
+
+def draw_white_court(frame, court):
+    if court is not None:
+        cv2.polylines(
+            frame,
+            [court["outline"]],
+            True,
+            WHITE_COURT_OUTLINE_COLOR,
+            3,
+            cv2.LINE_AA,
+        )
+
+
+def filter_objects_on_court(objects, court, frame_shape):
+    """コート領域と1ピクセル以上重なる物体だけを残す。"""
+    if court is None:
+        return []
+
+    court_mask = court["mask"]
+    object_mask = np.zeros(frame_shape[:2], dtype=np.uint8)
+    filtered = []
+    for obj in objects:
+        object_mask.fill(0)
+        contour = np.array(obj["contour"], dtype=np.int32).reshape((-1, 1, 2))
+        cv2.drawContours(object_mask, [contour], -1, 255, cv2.FILLED)
+        if cv2.countNonZero(cv2.bitwise_and(object_mask, court_mask)) > 0:
+            filtered.append(obj)
+    return filtered
+
+
+def object_front_priority(obj):
+    """画面上の低さを優先し、同じ高さの場合だけ面積で比較する。"""
+    _x, y, _w, h = obj["bbox"]
+    return (y + h, obj["area"])
 
 
 def find_objects(mask, min_area=MIN_AREA, min_height=1):
@@ -163,10 +281,10 @@ def find_objects(mask, min_area=MIN_AREA, min_height=1):
             }
         )
 
-    return sorted(objects, key=lambda item: item["area"], reverse=True)
+    return sorted(objects, key=object_front_priority, reverse=True)
 
 
-def draw_objects(frame, color_name, detections, bgr, draw_contour=False):
+def draw_objects(frame, color_name, detections, bgr, draw_contour=False, show_details=True):
     for obj in detections:
         x, y, w, h = obj["bbox"]
         cx, cy = obj["center"]
@@ -178,6 +296,8 @@ def draw_objects(frame, color_name, detections, bgr, draw_contour=False):
             cv2.drawContours(frame, [points], -1, bgr, 2, cv2.LINE_AA)
         else:
             cv2.rectangle(frame, (x, y), (x + w, y + h), bgr, 2)
+        if not show_details:
+            continue
         cv2.circle(frame, (cx, cy), 5, bgr, -1)
         cv2.putText(
             frame,
@@ -407,8 +527,8 @@ def draw_blue_line_crossing_count(frame, count):
     )
 
 
-def detect_blue_line(frame):
-    """床の青いテープを検出し、中心、端点、角度を返す。"""
+def detect_blue_line(frame, valid_mask=None, court_mask=None):
+    """青いテープを検出する。court_mask指定時はコートと重なる候補に限る。"""
     frame_h, frame_w = frame.shape[:2]
     roi_top = int(frame_h * BLUE_LINE_ROI_TOP_RATIO)
     hsv = cv2.cvtColor(frame[roi_top:, :], cv2.COLOR_BGR2HSV)
@@ -420,10 +540,13 @@ def detect_blue_line(frame):
     mask = cv2.inRange(hsv, lower, upper)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, BLUE_LINE_KERNEL)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, BLUE_LINE_KERNEL)
+    if valid_mask is not None:
+        mask = cv2.bitwise_and(mask, valid_mask[roi_top:, :])
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     candidates = []
     min_line_length = frame_w * BLUE_LINE_MIN_LENGTH_RATIO
+    overlap_mask = np.zeros_like(mask) if court_mask is not None else None
     for contour in contours:
         area = float(cv2.contourArea(contour))
         if area < BLUE_LINE_MIN_AREA:
@@ -435,6 +558,11 @@ def detect_blue_line(frame):
         elongation = long_side / short_side
         if long_side < min_line_length or elongation < BLUE_LINE_MIN_ELONGATION:
             continue
+        if court_mask is not None:
+            overlap_mask.fill(0)
+            cv2.drawContours(overlap_mask, [contour], -1, 255, cv2.FILLED)
+            if not np.any((overlap_mask > 0) & (court_mask[roi_top:, :] > 0)):
+                continue
         candidates.append((area * elongation, contour, area, elongation))
 
     if not candidates:
@@ -599,7 +727,20 @@ def build_black_wall_probe_line(primary, frame, direction=1):
     )
 
 
-def measure_black_wall_ratio(frame, probe_line=None):
+def build_search_black_wall_probe_line(frame, direction):
+    """find_obj用に、進行方向側の画面下部へ短い縦の検査線を置く。"""
+    frame_height, frame_width = frame.shape[:2]
+    x = (
+        frame_width - 1 - BLACK_WALL_PROBE_END_X
+        if direction == 0
+        else BLACK_WALL_PROBE_END_X
+    )
+    bottom_y = frame_height - 1
+    top_y = max(0, bottom_y - SEARCH_BLACK_WALL_PROBE_LENGTH)
+    return ((int(x), top_y), (int(x), bottom_y))
+
+
+def measure_black_wall_ratio(frame, probe_line=None, valid_mask=None):
     """検査線の周囲を黒い画素が占める割合を0.0〜1.0で返す。"""
     if probe_line is None:
         return 0.0
@@ -615,6 +756,8 @@ def measure_black_wall_ratio(frame, probe_line=None):
         cv2.LINE_8,
     )
     inspected_pixels = line_mask > 0
+    if valid_mask is not None:
+        inspected_pixels &= valid_mask > 0
     if not np.any(inspected_pixels):
         return 0.0
 
@@ -678,7 +821,7 @@ def choose_primary_detection(red_objects, green_objects):
         candidates.append(("green", green_objects[0]))
     if not candidates:
         return None
-    return max(candidates, key=lambda item: item[1]["area"])
+    return max(candidates, key=lambda item: object_front_priority(item[1]))
 
 
 class PiColorDetector:
@@ -693,6 +836,10 @@ class PiColorDetector:
         recording_path=None,
         recording_fps=RECORDING_FPS,
         camera_num=CAMERA_NUM,
+        detect_court_enabled=False,
+        bottom_exclusion_size=None,
+        show_debug_overlays=True,
+        filter_objects_on_court_enabled=True,
     ):
         self.sample_dir = Path(sample_dir)
         self.preview_port = preview_port
@@ -700,6 +847,10 @@ class PiColorDetector:
         self.enable_recording = enable_recording
         self.detect_objects_enabled = detect_objects_enabled
         self.detect_boundary_enabled = detect_boundary_enabled
+        self.detect_court_enabled = detect_court_enabled
+        self.filter_objects_on_court_enabled = filter_objects_on_court_enabled
+        self.bottom_exclusion_size = bottom_exclusion_size
+        self.show_debug_overlays = show_debug_overlays
         self.recording_path = Path(recording_path) if recording_path is not None else None
         self.recording_fps = recording_fps
         self.camera_num = camera_num
@@ -716,6 +867,7 @@ class PiColorDetector:
         self._fps = 0.0
         self.blue_line_crossing_count = 0
         self.black_wall_probe_direction = 1
+        self.search_black_wall_probe_enabled = False
         # 画面の下1/3は物体検出の対象外にする。
         self.ignore_below_y = DEFAULT_IGNORE_BELOW_Y
 
@@ -795,6 +947,9 @@ class PiColorDetector:
             raise ValueError("black wall probe direction は0または1にしてください。")
         self.black_wall_probe_direction = direction
 
+    def set_search_black_wall_probe_enabled(self, enabled):
+        self.search_black_wall_probe_enabled = bool(enabled)
+
     def set_blue_line_crossing_count(self, count):
         self.blue_line_crossing_count = max(0, int(count))
 
@@ -836,8 +991,25 @@ class PiColorDetector:
 
         frame = self.camera.capture_array()
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        valid_mask = None
+        if self.bottom_exclusion_size is not None:
+            frame_h, frame_w = frame.shape[:2]
+            excluded_w = min(self.bottom_exclusion_size[0], frame_w)
+            excluded_h = min(self.bottom_exclusion_size[1], frame_h)
+            left = (frame_w - excluded_w) // 2
+            valid_mask = np.full((frame_h, frame_w), 255, dtype=np.uint8)
+            valid_mask[frame_h - excluded_h:, left:left + excluded_w] = 0
+        display_frame = frame.copy()
+        if valid_mask is not None:
+            # 除外範囲の色がぼかしで周囲へ混ざるのを防ぐ。
+            frame[valid_mask == 0] = 0
         frame = cv2.GaussianBlur(frame, (5, 5), 0)
-        blue_line, blue_line_mask = detect_blue_line(frame)
+        court = detect_white_court(frame, valid_mask) if self.detect_court_enabled else None
+        court_mask = None
+        if self.detect_court_enabled:
+            # コート未検出時は青線も採用しない。
+            court_mask = court["mask"] if court is not None else np.zeros(frame.shape[:2], dtype=np.uint8)
+        blue_line, blue_line_mask = detect_blue_line(frame, valid_mask, court_mask)
         if self.detect_objects_enabled:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             red_mask = create_mask(hsv, "red")
@@ -846,6 +1018,10 @@ class PiColorDetector:
             red_mask[:GUIDE_TOP_LINE_Y, :] = 0
             green_mask[:GUIDE_TOP_LINE_Y, :] = 0
             magenta_mask[:GUIDE_TOP_LINE_Y, :] = 0
+            if valid_mask is not None:
+                red_mask[valid_mask == 0] = 0
+                green_mask[valid_mask == 0] = 0
+                magenta_mask[valid_mask == 0] = 0
             # if self.ignore_below_y is not None:
             #     limit_y = max(0, min(int(self.ignore_below_y), frame.shape[0]))
             #     red_mask[limit_y:, :] = 0
@@ -853,6 +1029,14 @@ class PiColorDetector:
             red_objects = find_objects(red_mask)
             green_objects = find_objects(green_mask)
             magenta_objects = find_objects(magenta_mask, min_area=MAGENTA_MIN_AREA)
+            if self.detect_court_enabled and self.filter_objects_on_court_enabled:
+                red_objects = filter_objects_on_court(red_objects, court, frame.shape)
+                green_objects = filter_objects_on_court(green_objects, court, frame.shape)
+                magenta_objects = filter_objects_on_court(
+                    magenta_objects,
+                    court,
+                    frame.shape,
+                )
         else:
             red_objects = []
             green_objects = []
@@ -861,38 +1045,64 @@ class PiColorDetector:
         # マゼンタは表示専用。走行用ターゲット線の対象にはしない。
         primary = choose_primary_detection(red_objects, green_objects)
         target_line = build_primary_target_line(primary, frame)
-        black_wall_probe_line = build_black_wall_probe_line(
-            primary,
-            frame,
-            self.black_wall_probe_direction,
-        )
-        black_wall_ratio = measure_black_wall_ratio(frame, black_wall_probe_line)
+        if self.search_black_wall_probe_enabled:
+            black_wall_probe_line = build_search_black_wall_probe_line(
+                frame,
+                self.black_wall_probe_direction,
+            )
+        else:
+            black_wall_probe_line = build_black_wall_probe_line(
+                primary,
+                frame,
+                self.black_wall_probe_direction,
+            )
+        black_wall_ratio = measure_black_wall_ratio(frame, black_wall_probe_line, valid_mask)
         black_wall_on_probe = black_wall_ratio >= BLACK_WALL_MIN_RATIO
 
         if self.enable_preview or self.enable_recording:
-            annotated_frame = frame.copy()
-            draw_fps(annotated_frame, self._fps)
-            draw_blue_line_crossing_count(
-                annotated_frame,
-                self.blue_line_crossing_count,
-            )
-            draw_boundary(annotated_frame, boundary)
+            annotated_frame = display_frame if valid_mask is not None else frame.copy()
+            if self.show_debug_overlays:
+                draw_fps(annotated_frame, self._fps)
+                draw_blue_line_crossing_count(
+                    annotated_frame,
+                    self.blue_line_crossing_count,
+                )
+                draw_boundary(annotated_frame, boundary)
             draw_blue_line(annotated_frame, blue_line)
-            draw_objects(annotated_frame, "RED", red_objects, (0, 0, 255))
-            draw_objects(annotated_frame, "GREEN", green_objects, (0, 200, 0))
+            if self.detect_court_enabled:
+                draw_white_court(annotated_frame, court)
+            draw_objects(
+                annotated_frame, "RED", red_objects, (0, 0, 255),
+                show_details=self.show_debug_overlays,
+            )
+            draw_objects(
+                annotated_frame, "GREEN", green_objects, (0, 200, 0),
+                show_details=self.show_debug_overlays,
+            )
             draw_objects(
                 annotated_frame,
                 "MAGENTA",
                 magenta_objects,
                 (255, 0, 255),
                 draw_contour=True,
+                show_details=self.show_debug_overlays,
             )
-            draw_primary_target_line(annotated_frame, target_line)
-            draw_black_wall_probe(
-                annotated_frame,
-                black_wall_on_probe,
-                black_wall_probe_line,
-            )
+            if self.show_debug_overlays:
+                draw_primary_target_line(annotated_frame, target_line)
+                draw_black_wall_probe(
+                    annotated_frame,
+                    black_wall_on_probe,
+                    black_wall_probe_line,
+                )
+                # 回避制御の切り替え位置をプレビュー・録画に表示する。
+                for guide_y in (150, 200):
+                    cv2.line(
+                        annotated_frame,
+                        (0, guide_y),
+                        (annotated_frame.shape[1] - 1, guide_y),
+                        GUIDE_COLOR,
+                        GUIDE_THICKNESS,
+                    )
         else:
             annotated_frame = frame
 
@@ -900,6 +1110,11 @@ class PiColorDetector:
         green_status = format_detection("GREEN", green_objects) if self.detect_objects_enabled else "GREEN: disabled"
         magenta_status = format_detection("MAGENTA", magenta_objects) if self.detect_objects_enabled else "MAGENTA: disabled"
         boundary_status = format_boundary(boundary) if self.detect_boundary_enabled else "boundary: disabled"
+        court_status = (
+            f"white court: area={court['area']}"
+            if court is not None
+            else "white court: not found"
+        ) if self.detect_court_enabled else "white court: disabled"
 
         return {
             "frame": frame,
@@ -908,10 +1123,12 @@ class PiColorDetector:
             "green_objects": green_objects,
             "magenta_objects": magenta_objects,
             "boundary": boundary,
+            "court": court,
             "red_status": red_status,
             "green_status": green_status,
             "magenta_status": magenta_status,
             "boundary_status": boundary_status,
+            "court_status": court_status,
             "blue_line": blue_line,
             "blue_line_mask": blue_line_mask,
             "blue_line_status": format_blue_line(blue_line),
@@ -959,6 +1176,7 @@ class PiColorDetector:
             result["magenta_status"],
             result["blue_line_status"],
             result["boundary_status"],
+            result["court_status"],
             result["black_wall_status"],
         ]
         if extra_lines:

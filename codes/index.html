@@ -158,6 +158,18 @@
             background: #1b1b1b;
             border: 1px solid #555;
         }
+
+        .bottom-square {
+            position: fixed;
+            bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+            left: 50%;
+            transform: translateX(-50%);
+            width: 40px;
+            height: 40px;
+            border: 2px solid #000;
+            background: #ffa500;
+            pointer-events: none;
+        }
     </style>
 </head>
 
@@ -200,6 +212,8 @@
         width="760"
         height="760"
     ></canvas>
+
+    <div class="bottom-square" aria-hidden="true"></div>
 
     <script>
         // Live ServerがRaspberry Pi以外で動く場合は、

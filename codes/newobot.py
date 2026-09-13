@@ -32,6 +32,8 @@ def set_angle(angle):
     angle = angle / 71.4
     if angle > 0:
         angle = angle * 1.4
+    else:
+        angle = angle * 2
     servo.value = angle
 
 

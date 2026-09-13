@@ -10,7 +10,12 @@ import time
 
 import RPi.GPIO as GPIO
 
-from camera_detector import PiColorDetector, build_primary_target_line
+from camera_detector import (
+    BOTTOM_EXCLUSION_SIZE,
+    PiColorDetector,
+    build_primary_target_line,
+    object_front_priority,
+)
 from gyro import get_angle, reset_angle, close_gyro
 # from ultrasound import us_get, dis_get, us_back_get, dis_back_get
 
@@ -35,30 +40,39 @@ GYRO_TURN_TIMEOUT_SECONDS = 20.0  # ジャイロ旋回を強制終了するま�
 
 # 障害物・壁回避のPD制御
 AVOID_GREEN_TARGET_ANGLE = -40  # 緑オブジェクト回避時の目標線角度（度）
-AVOID_RED_TARGET_ANGLE = 40  # 赤オブジェクト回避時の目標線角度（度）
-AVOID_STEERING_MAX = 37  # オブジェクト回避で許可する最大操舵角（度）
+AVOID_RED_TARGET_ANGLE = 45  # 赤オブジェクト回避時の目標線角度（度）
+AVOID_GREEN_TARGET_ANGLE_BELOW_150 = -35  # 物体中心Yが150を超えたときの緑の目標線角度（度）
+AVOID_RED_TARGET_ANGLE_BELOW_150 = 40  # 物体中心Yが150を超えたときの赤の目標線角度（度）
+AVOID_STEERING_MAX = 30  # 37 オブジェクト回避で許可する最大操舵角（度）
 AVOID_WALL_STEERING_ANGLE = 30.0  # 黒壁を検知したときの固定操舵角（度）
-AVOID_KP = 1.5  # 目標線の角度ずれに対する比例補正の強さ
-AVOID_KD = 0.2  # 目標線の角度変化に対する微分補正の強さ
-AVOID_GO_STRAIGHT_BELOW_Y = 200  # 物体中心がこのY座標より下なら直進する
+AVOID_KP = 1.5  # 目標線の角度ずれに対する比例補正の強さ 1.5
+AVOID_KD = 0.1# 目標線の角度変化に対する微分補正の強さ
+AVOID_HOLD_STEERING_BELOW_Y = 200  # 物体中心がこのY座標より下なら直進または操舵角維持へ切り替える
+AVOID_STRAIGHT_ANGLE_TOLERANCE = 5.0  # 目標線角度が目標角の±この値以内なら直進する（度）
 AVOID_WALL_STEERING_UPDATE_MIN = 0.5  # 壁回避の操舵を更新する最小角度差（度）
 AVOID_POWER_BOOST_STEERING_THRESHOLD = 30  # パワーを上げる操舵角の境界値（度）
-AVOID_POWER_BOOST = 15  # 急操舵時にモーターパワーへ加える値
+AVOID_POWER_BOOST = 0  # 急操舵時にモーターパワーへ加える値
 
 # 後退確認
 BACK_CHECK_AREA_THRESHOLD = 2000  # 後退が必要と判定する物体の最小面積
 BACK_CHECK_SECONDS = 1.25  # 後退を継続する秒数
 
+
 # 青線の検出判定
 BLUE_LINE_COOLDOWN_SECONDS = 2.5  # 同じ青線の二重計上を防ぐ無視時間（秒）
 BLUE_LINE_CROSSING_TARGET = 4  # 終了判定を開始する青線の目標通過回数
-BLUE_LINE_LOST_CONFIRM_SECONDS = 1.0  # direction=0で青線消失を確定する秒数
-BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE = 1.5  # direction=1で青線消失を確定する秒数
+BLUE_LINE_LOST_CONFIRM_SECONDS = 1.5  # direction=0で青線消失を確定する秒数
+BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE = 2  # direction=1で青線消失を確定する秒数
 
 # 障害物競技中に常時点灯する後方ライト
 REAR_LIGHT_PIN = 21  # 後方ライトを接続するGPIO番号（BCM）
 
-detector = PiColorDetector(enable_recording=True, detect_boundary_enabled=False)
+detector = PiColorDetector(
+    enable_recording=True,
+    detect_boundary_enabled=False,
+    detect_court_enabled=True,
+    bottom_exclusion_size=BOTTOM_EXCLUSION_SIZE,
+)
 from newobot import dc_motor, set_angle, stop, cleanup
 
 # ---------------------------------------------------------------------------
@@ -255,9 +269,6 @@ def blue_line_finish_reached(
 
 def select_front_object(result):
     """検出結果から、画面の一番下に映っている物体を選ぶ。"""
-    selected_color = None
-    selected_object = None
-
     candidates = []
     for red_object in result["red_objects"]:
         candidates.append(("red", red_object))
@@ -265,24 +276,10 @@ def select_front_object(result):
     for green_object in result["green_objects"]:
         candidates.append(("green", green_object))
 
-    for color_name, obj in candidates:
-        if selected_object is None:
-            selected_color = color_name
-            selected_object = obj
-            continue
+    if not candidates:
+        return None, None
 
-        object_y = obj["center"][1]
-        selected_y = selected_object["center"][1]
-
-        is_lower = object_y > selected_y
-        is_same_height = object_y == selected_y
-        is_larger = obj["area"] > selected_object["area"]
-
-        if is_lower or (is_same_height and is_larger):
-            selected_color = color_name
-            selected_object = obj
-
-    return selected_color, selected_object
+    return max(candidates, key=lambda item: object_front_priority(item[1]))
 
 
 def back_check(power, keep_camera_running=False):
@@ -321,24 +318,8 @@ def back_check(power, keep_camera_running=False):
 
 def select_front_magenta_object(result):
     """検出したマゼンタのうち、画面上で最も手前の物体を選ぶ。"""
-    selected_object = None
-
-    for obj in result.get("magenta_objects", []):
-        if selected_object is None:
-            selected_object = obj
-            continue
-
-        object_y = obj["center"][1]
-        selected_y = selected_object["center"][1]
-
-        is_lower = object_y > selected_y
-        is_same_height = object_y == selected_y
-        is_larger = obj["area"] > selected_object["area"]
-
-        if is_lower or (is_same_height and is_larger):
-            selected_object = obj
-
-    return selected_object
+    objects = result.get("magenta_objects", [])
+    return max(objects, key=object_front_priority) if objects else None
 
 
 def find_obj(
@@ -355,8 +336,14 @@ def find_obj(
     Returns:
         str | None: 見つけた色名。中断されたら None
     """
+    if rd not in (0, 1):
+        raise ValueError("find_obj の rd は0または1にしてください。")
+
     steering_angle = AVOID_STEERING_MAX
     search_started = False
+    wall_avoiding = False
+    detector.set_black_wall_probe_direction(rd)
+    detector.set_search_black_wall_probe_enabled(True)
     try:
         while True:
             result = detector.process_once()
@@ -370,6 +357,28 @@ def find_obj(
                 stop()
                 set_angle(0)
                 return None
+
+            # rd=0は右下、rd=1は左下の固定検査線を使う。
+            # 黒が15%以上ある間は、壁と反対方向へ30度操舵する。
+            if result.get("black_wall_on_probe", False):
+                wall_steering = (
+                    -AVOID_WALL_STEERING_ANGLE
+                    if rd == 0
+                    else AVOID_WALL_STEERING_ANGLE
+                )
+                if not wall_avoiding:
+                    set_angle(wall_steering)
+                    wall_avoiding = True
+                if not search_started:
+                    dc_motor(duty_cycle)
+                    search_started = True
+                continue
+
+            # 壁が検査線から消えたら、通常の探索方向へ戻す。
+            if wall_avoiding:
+                normal_steering = steering_angle if rd == 0 else -steering_angle
+                set_angle(normal_steering)
+                wall_avoiding = False
 
             color_name, obj = select_front_object(result)
 
@@ -392,6 +401,8 @@ def find_obj(
         stop()
         set_angle(0)
         raise
+    finally:
+        detector.set_search_black_wall_probe_enabled(False)
 
 
 def avoid_obj(
@@ -416,6 +427,9 @@ def avoid_obj(
     previous_time = None
     previous_color = None
     previous_wall_steering = None
+    previous_target_angle = None
+    # 呼び出し元の探索処理は操舵角0で終了する。壁回避ではこの値を上書きしない。
+    object_steering = 0.0
     current_duty_cycle = duty_cycle
     buzzer_active = False
     buzzer_stop()
@@ -460,6 +474,7 @@ def avoid_obj(
             previous_color = None
             continue
 
+        wall_just_cleared = previous_wall_steering is not None
         previous_wall_steering = None
 
         control_target = primary
@@ -473,31 +488,44 @@ def avoid_obj(
 
         color_name, obj = control_target
         object_y = obj["center"][1]
-        if object_y > AVOID_GO_STRAIGHT_BELOW_Y:
+        target_angle = (
+            AVOID_GREEN_TARGET_ANGLE
+            if color_name == "green"
+            else AVOID_RED_TARGET_ANGLE
+        )
+        if object_y > 150:
+            target_angle = (
+                AVOID_GREEN_TARGET_ANGLE_BELOW_150
+                if color_name == "green"
+                else AVOID_RED_TARGET_ANGLE_BELOW_150
+            )
+        error = line_angle - target_angle
+        if object_y > AVOID_HOLD_STEERING_BELOW_Y:
             if buzzer_active:
                 buzzer_stop()
                 buzzer_active = False
             if current_duty_cycle != duty_cycle:
                 dc_motor(duty_cycle)
                 current_duty_cycle = duty_cycle
-            set_angle(0)
+            if abs(error) <= AVOID_STRAIGHT_ANGLE_TOLERANCE:
+                set_angle(0)
+                object_steering = 0.0
+            # 許容範囲外では角度を維持し、壁回避後は壁検知前の角度へ戻す。
+            elif wall_just_cleared:
+                set_angle(object_steering)
             previous_error = None
             previous_time = None
             previous_color = None
             continue
+            
 
-        target_angle = (
-            AVOID_GREEN_TARGET_ANGLE
-            if color_name == "green"
-            else AVOID_RED_TARGET_ANGLE
-        )
         current_time = time.monotonic()
-        error = line_angle - target_angle
 
         if (
             previous_error is None
             or previous_time is None
             or previous_color != color_name
+            or previous_target_angle != target_angle
         ):
             derivative = 0.0
         else:
@@ -542,9 +570,11 @@ def avoid_obj(
                     f"steering={steering:+.1f}°, power={desired_duty_cycle:.1f}"
                 )
         set_angle(steering)
+        object_steering = steering
         previous_error = error
         previous_time = current_time
         previous_color = color_name
+        previous_target_angle = target_angle
 
 
 def _run_obstacle_challenge(
@@ -570,7 +600,7 @@ def _run_obstacle_challenge(
         while True:
             # 対象物が見つかるまで探索する。
             find_obj(
-                power + 20,
+                power ,
                 direction,
                 finish_state,
                 finish_delay_seconds,
@@ -621,10 +651,11 @@ def _run_obstacle_challenge(
 
 
 def obstacle_challenge(power, direction):
-    """青線を目標回数検出したら、すぐに停止する。"""
+    """np版と同じ青線消失時間・マゼンタ個数の条件で停止する。"""
     _run_obstacle_with_rear_light(
         power,
         direction,
+        require_magenta_absent=True,
     )
 
 
@@ -632,6 +663,7 @@ def _run_obstacle_with_rear_light(
     power,
     direction,
     finish_delay_seconds=0.0,
+    require_magenta_absent=False,
 ):
     """後方ライトを点灯し、障害物競技終了時に必ず消灯する。"""
     GPIO.setmode(GPIO.BCM)
@@ -642,6 +674,7 @@ def _run_obstacle_with_rear_light(
             power,
             direction,
             finish_delay_seconds=finish_delay_seconds,
+            require_magenta_absent=require_magenta_absent,
         )
     finally:
         GPIO.output(REAR_LIGHT_PIN, GPIO.LOW)
@@ -649,9 +682,6 @@ def _run_obstacle_with_rear_light(
 
 def obstacle_challenge_np(power):
     """周回方向別の青線消失時間とマゼンタ個数で停止する。"""
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(REAR_LIGHT_PIN, GPIO.OUT, initial=GPIO.LOW)
-    GPIO.output(REAR_LIGHT_PIN, GPIO.HIGH)
     # button_sleep()
     try:
         direction = back_check(
@@ -666,11 +696,49 @@ def obstacle_challenge_np(power):
     finally:
         GPIO.output(REAR_LIGHT_PIN, GPIO.LOW)
 
+def out_park(direction):
+    set_angle(0)
+    dc_motor(-30)
+    time.sleep(0.5)
+    stop()
+
+    if direction == 0:
+        set_angle(40)
+    else:
+        set_angle(-40)
+    dc_motor(30)
+    time.sleep(1)
+
+    set_angle(0)
+    time.sleep(1)
+    stop()
 
 def main():
-    button_sleep()
-    obstacle_challenge_np(50)
+    GPIO.setmode(GPIO.BCM)
+    
+    GPIO.setup(20, GPIO.OUT, initial=GPIO.LOW)
+    GPIO.setup(16, GPIO.OUT, initial=GPIO.LOW)
+    GPIO.output(20, GPIO.HIGH)
+    GPIO.output(16, GPIO.HIGH)
+
+    GPIO.setup(REAR_LIGHT_PIN, GPIO.OUT, initial=GPIO.LOW)
+    GPIO.output(REAR_LIGHT_PIN, GPIO.HIGH)
+    
+    # button_sleep()
+
+    GPIO.output(20, GPIO.LOW)
+    GPIO.output(16, GPIO.LOW)
+    time.sleep(0.5)
+
+    
+    out_park(0)    
+    obstacle_challenge(30,0)
     stop()
+
+    GPIO.output(20, GPIO.HIGH)
+    GPIO.output(16, GPIO.HIGH)
+    GPIO.output(REAR_LIGHT_PIN, GPIO.HIGH)
+
     # dc_motor(35)
     # time.sleep(1)
     # stop()
