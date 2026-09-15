@@ -60,7 +60,7 @@ BACK_CHECK_SECONDS = 1.25  # 後退を継続する秒数
 
 # 青線の検出判定
 BLUE_LINE_COOLDOWN_SECONDS = 2.5  # 同じ青線の二重計上を防ぐ無視時間（秒）
-BLUE_LINE_CROSSING_TARGET = 4  # 終了判定を開始する青線の目標通過回数
+BLUE_LINE_CROSSING_TARGET = 12  # 終了判定を開始する青線の目標通過回数
 BLUE_LINE_LOST_CONFIRM_SECONDS = 1.5  # direction=0で青線消失を確定する秒数
 BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE = 2  # direction=1で青線消失を確定する秒数
 
@@ -731,8 +731,8 @@ def main():
     time.sleep(0.5)
 
     
-    out_park(0)    
-    obstacle_challenge(30,0)
+    # out_park(0)    
+    obstacle_challenge_np(30)
     stop()
 
     GPIO.output(20, GPIO.HIGH)
