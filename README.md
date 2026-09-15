@@ -105,6 +105,7 @@
 | DC Motor | Pololu 50:1 Metal Gearmotor 37Dx70L mm 12V with 64 CPR Encoder (Helical Pinion) |
 | Motor Driver | DRV8871 | 
 | Servo Motor | SG90 |
+| USB PD Power Supply | PWR-USBDCDC5 |
 | Connectors | JST XA Series　|
 
 ## Controller
