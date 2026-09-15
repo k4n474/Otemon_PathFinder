@@ -46,28 +46,28 @@ Meet the Engineers
 ## Photos of Robots
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R1.JPG" alt="Robot1" width="45%">
-  <img src="images/Robot_images/IMG_R2.JPG" alt="Robot2" width="45%">
+  <img src="images/Robot_images/IMG_R1.jpeg" alt="Robot1" width="45%">
+  <img src="images/Robot_images/IMG_R2.jpeg" alt="Robot2" width="45%">
 </p>
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R3.JPG" alt="Robot3" width="45%">
-  <img src="images/Robot_images/IMG_R4.JPG" alt="Robot4" width="45%">
+  <img src="images/Robot_images/IMG_R3.jpeg" alt="Robot3" width="45%">
+  <img src="images/Robot_images/IMG_R4.jpeg" alt="Robot4" width="45%">
 </p>
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R5.JPG" alt="Robot5" width="45%">
-  <img src="images/Robot_images/IMG_R6.JPG" alt="Robot6" width="45%">
+  <img src="images/Robot_images/IMG_R5.jpeg" alt="Robot5" width="45%">
+  <img src="images/Robot_images/IMG_R6.jpeg" alt="Robot6" width="45%">
 </p>
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R7.JPG" alt="Robot7" width="45%">
-  <img src="images/Robot_images/IMG_R8.JPG" alt="Robot8" width="45%">
+  <img src="images/Robot_images/IMG_R7.jpeg" alt="Robot7" width="45%">
+  <img src="images/Robot_images/IMG_R8.jpeg" alt="Robot8" width="45%">
 </p>
 
 <p align="center">
-  <img src="images/Robot_images/IMG_R9.JPG" alt="Robot9" width="45%">
-  <img src="images/Robot_images/IMG_R10.JPG" alt="Robot10" width="45%">
+  <img src="images/Robot_images/IMG_R9.jpeg" alt="Robot9" width="45%">
+  <img src="images/Robot_images/IMG_R10.jpeg" alt="Robot10" width="45%">
 </p>
 
 ## Videos
