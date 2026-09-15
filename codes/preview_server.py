@@ -1,9 +1,8 @@
-"""
-ブラウザから見られる簡易MJPEGプレビューサーバー。
+"""Provide a simple MJPEG camera preview in a browser.
 
-- `/` でプレビュー画面
-- `/stream.mjpg` で映像ストリーム
-- `/action/<name>` でボタン操作
+- / serves the preview page.
+- /stream.mjpg streams camera frames.
+- /action/<name> queues a button action for the camera loop.
 """
 
 from http import HTTPStatus
@@ -15,6 +14,7 @@ import cv2
 
 
 class PreviewServer:
+    """Share camera frames, status text, and queued actions with HTTP threads."""
     def __init__(self, host="0.0.0.0", port=8000, title="Pi Camera Preview"):
         self.host = host
         self.port = port
@@ -62,6 +62,7 @@ class PreviewServer:
                 self.wfile.write(body)
 
             def _serve_stream(self):
+                # Each JPEG is a separate part of the browser's multipart stream.
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Pragma", "no-cache")
@@ -93,6 +94,7 @@ class PreviewServer:
             self._server = None
 
     def publish_frame(self, frame):
+        """Encode a frame once and make the resulting JPEG available to all clients."""
         ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         if not ok:
             return
@@ -116,6 +118,7 @@ class PreviewServer:
             self._actions.append(action)
 
     def pop_actions(self):
+        """Atomically drain actions so the camera loop handles each click once."""
         with self._action_lock:
             actions = list(self._actions)
             self._actions.clear()

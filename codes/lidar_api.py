@@ -1,3 +1,5 @@
+"""Serve LiDAR measurements, detected walls, and the browser viewer over HTTP."""
+
 import atexit
 
 from flask import Flask, jsonify, send_from_directory
@@ -35,6 +37,7 @@ def home():
 
 @app.get("/api/points")
 def api_points():
+    """Return the latest scan and geometry in the format expected by index.html."""
     points = lidar.get_points()
     walls = detect_walls(points)
     corners = detect_corners(walls)
@@ -66,6 +69,7 @@ def api_points():
 
 @app.get("/api/status")
 def api_status():
+    """Expose serial-reader health and scan statistics for diagnostics."""
     return jsonify(
         lidar.get_status()
     )
@@ -73,6 +77,7 @@ def api_status():
 
 @atexit.register
 def cleanup() -> None:
+    # Close the serial reader when the server process exits normally.
     lidar.stop()
 
 

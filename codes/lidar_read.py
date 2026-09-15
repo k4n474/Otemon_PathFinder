@@ -5,10 +5,9 @@ from typing import Optional
 
 
 class LidarReader:
-    """
-    YDLIDAR T-mini Plus用のSDKなしUARTリーダー。
+    """Read a YDLIDAR T-mini Plus over UART without the vendor SDK.
 
-    出力形式:
+    Output is a list of measurements in degrees and millimeters:
     [
         {
             "angle": 123.45,
@@ -20,13 +19,13 @@ class LidarReader:
 
     HEADER = b"\xAA\x55"
 
-    # YDLIDAR標準コマンド
+    # Standard YDLIDAR commands.
     CMD_PREFIX = 0xA5
     CMD_SCAN = 0x60
     CMD_STOP = 0x65
     CMD_SCAN_FREQUENCY_ADD_1HZ = 0x0B
 
-    # 後方180度を中心に左右60度ずつ取得しない
+    # Exclude the rear sector within 60 degrees of 180 degrees.
     REAR_EXCLUSION_START = 120.0
     REAR_EXCLUSION_END = 240.0
 
@@ -87,12 +86,12 @@ class LidarReader:
             timeout=0.2
         )
 
-        # 古い受信データを捨てる
+        # Discard stale serial input.
         self.serial_port.reset_input_buffer()
         self.serial_port.reset_output_buffer()
 
-        # T-mini Plusは停止中に0xA5 0x0Bを送ると
-        # スキャン周波数が1 Hz増加する（上限12 Hz）。
+        # While stopped, each 0xA5 0x0B command increases the T-mini Plus
+        # scan frequency by 1 Hz, up to 12 Hz.
         for _ in range(self.scan_frequency_increase_hz):
             self._send_command(
                 self.CMD_SCAN_FREQUENCY_ADD_1HZ
@@ -100,12 +99,12 @@ class LidarReader:
             time.sleep(0.05)
 
         if self.scan_frequency_increase_hz:
-            # 周波数設定コマンドの応答を読み捨ててから
-            # スキャンデータの受信を開始する。
+            # Discard replies to the frequency commands before
+            # receiving scan packets.
             time.sleep(0.1)
             self.serial_port.reset_input_buffer()
 
-        # スキャン開始
+        # Start scanning.
         self._send_command(self.CMD_SCAN)
 
         time.sleep(0.5)
@@ -144,6 +143,7 @@ class LidarReader:
         print("LiDAR stopped")
 
     def get_points(self) -> list[dict[str, float | int]]:
+        """Copy the latest published scan under the reader lock."""
         with self._lock:
             return [point.copy() for point in self._points]
 
@@ -179,6 +179,7 @@ class LidarReader:
         self.serial_port.flush()
 
     def _read_exactly(self, size: int) -> Optional[bytes]:
+        """Combine partial serial reads, returning None on timeout or shutdown."""
         if self.serial_port is None:
             return None
 
@@ -200,9 +201,7 @@ class LidarReader:
         return bytes(data)
 
     def _find_header(self) -> bool:
-        """
-        0xAA 0x55を受信するまで読み進める。
-        """
+        """Read until the packet header bytes 0xAA 0x55 are found."""
 
         if self.serial_port is None:
             return False
@@ -257,18 +256,16 @@ class LidarReader:
                 time.sleep(0.01)
 
     def _read_packet(self) -> Optional[dict]:
-        """
-        パケット構成:
+        """Read a packet using the T-mini Plus three-byte intensity sample format.
 
-        PH  : 2 bytes  AA 55
-        CT  : 1 byte
-        LSN : 1 byte
-        FSA : 2 bytes
-        LSA : 2 bytes
-        CS  : 2 bytes
-        Si  : LSN × 3 bytes
-
-        T-mini Plusは強度付き3バイト形式として解析する。
+        Packet layout:
+            PH  : 2 bytes, AA 55
+            CT  : 1 byte
+            LSN : 1 byte (sample count)
+            FSA : 2 bytes (first sample angle)
+            LSA : 2 bytes (last sample angle)
+            CS  : 2 bytes (checksum)
+            Si  : LSN * 3 bytes (intensity and distance samples)
         """
 
         fixed = self._read_exactly(8)
@@ -335,9 +332,7 @@ class LidarReader:
         lsa: int,
         sample_data: bytes
     ) -> int:
-        """
-        強度付き3バイト形式のチェックサム。
-        """
+        """Calculate the checksum for three-byte samples containing intensity."""
 
         checksum = 0x55AA
         checksum ^= fsa
@@ -373,7 +368,7 @@ class LidarReader:
         lsa = packet["lsa"]
         sample_data = packet["sample_data"]
 
-        # CTのbit0が1なら1周の開始パケット
+        # CT bit 0 marks the first packet of a new revolution.
         is_start_packet = bool(ct & 0x01)
 
         if is_start_packet:
@@ -431,13 +426,13 @@ class LidarReader:
                 | distance_high << 8
             )
 
-            # 強度付きYDLIDAR形式
+            # Decode the YDLIDAR sample format with intensity.
             intensity = (
                 intensity_low
                 | (distance_low & 0x03) << 8
             )
 
-            # 距離は上位14bit
+            # The upper 14 bits hold the distance.
             distance = raw_distance >> 2
 
             if lsn > 1:
@@ -452,7 +447,7 @@ class LidarReader:
 
             angle %= 360.0
 
-            # 後方（180度を中心とした±60度）の点を除外
+            # Discard points in the rear sector: 180 degrees +/- 60 degrees.
             if (
                 self.REAR_EXCLUSION_START
                 <= angle
@@ -460,10 +455,10 @@ class LidarReader:
             ):
                 continue
 
-            # LiDARを左右反転して取り付けているため角度を反転
+            # Mirror angles to account for the left-right reversal of the LiDAR mounting.
             angle = (-angle) % 360.0
 
-            # 異常値を除外
+            # Reject out-of-range distances.
             if distance < 50:
                 continue
 
@@ -480,9 +475,7 @@ class LidarReader:
     def _clean_scan(
         points: list[dict[str, float | int]]
     ) -> list[dict[str, float | int]]:
-        """
-        角度順に並べ、極端な重複を整理する。
-        """
+        """Sort measurements by angle and remove near-duplicate readings."""
 
         valid_points = []
 

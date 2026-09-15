@@ -7,9 +7,8 @@
 
 
 
-# Robot
 
-## 1. Robot Introduction
+## Photos of Robots
 
 <p align="center">
   <img src="images/Robot_images/IMG_R1.JPG" alt="Robot1" width="45%">
@@ -35,6 +34,12 @@
   <img src="images/Robot_images/IMG_R9.JPG" alt="Robot9" width="45%">
   <img src="images/Robot_images/IMG_R10.JPG" alt="Robot10" width="45%">
 </p>
+
+## Videos
+[Open_ChallengeCounter-clockwise](https://youtu.be/6eP5m4vgBc8)<br>
+[Open_Challenge_clockwise](https://youtu.be/HAOU7pk2X0k)<br>
+[Obstacle_ChallengeCounter-clockwise](https://youtu.be/kFfds26Y_WM)<br>
+[Obstacle_Challenge_clockwise](https://youtu.be/7NU6L5QEaes)
 
 ## Controller
 
@@ -62,6 +67,7 @@ Currently, for each full rotation of LiDAR data (angle and distance), we remove 
 Among the detected walls, we select up to the three walls with the highest number of points and classify them into right wall / front wall / left wall based on the direction of the perpendicular from the LiDAR to the wall. If three walls are available, we assign right–front–left in order of angle. If only one or two are available, we assign roles based on which reference direction they are closest to. However, to be used as a front wall, the wall must be at least 500 mm long. Distances to walls are computed using the perpendicular distance from the LiDAR to the wall line, and we follow whichever side wall is longer. This recognition is performed every rotation, and we do not build a map by accumulating past point clouds.
 
 ![LiDAR](images/Other_images/LiDAR_screen.png)
+<img src="images/Other_images/LiDAR.gif" width="800">
 
 ## Camera
 
@@ -98,6 +104,9 @@ We selected **ABS** as the printing material. At the beginning of development, w
 
 We use a **Bambu Lab X2D** for manufacturing. At the beginning of development, all parts were produced using a **Bambu Lab A1**. However, the A1 could not print ABS, so we introduced the X2D to enable ABS printing(Jul. 2026). In addition, the **Bambu Lab X2D** improved printing speed and quality.
 
+![PETG](images/Other_images/PETG.jpg)
+This is the PETG chassis from an early version of our robot. All parts have been fine-tuned.
+
 ## Steering Mechanism
 
 Initially, our robot used a conventional steering mechanism. However, it could not achieve sufficient turning performance when negotiating sharp corners.
@@ -131,6 +140,10 @@ The Raspberry Pi is powered by a **5,000 mAh USB Power Delivery (PD) power bank*
 
 To simplify wiring as additional functions were added, we also designed and manufactured a **custom Raspberry Pi HAT board**(Jun. 2026). This board organizes the wiring, simplifies assembly and maintenance, and improves the overall maintainability of the robot.
 
+![HAT](images/Other_images/HAT.jpg)
+
+### Overall Wiring
+
 ![Wiring](images/Other_images/Wiring.jpg)
 
 # Software
@@ -155,10 +168,16 @@ In `avoid_obj`, the robot avoids **red** objects by going to the right and **gre
 
 For example, if the object is green, the robot draws a line from the bottom-right corner of the image to the center of the green object, and uses PD control on the steering so that the angle inside that line matches a preset value. During `avoid_obj`, another line is drawn from the bottom-right corner to a point slightly left of the object’s left edge (object width × 3 px). This line corresponds to the path of the robot’s right edge while avoiding the object. If this line overlaps with a wall, the robot would collide with the wall if it continued, so it temporarily stops the avoidance PID control and steers left until the wall no longer overlaps with the wall-detection line. (For red objects, the left/right behavior is reversed.)
 
-![Obstacle_image](images/Other_images/Obstacle_image.png)
+![Obstacle_image](images/Other_images/Obstacle_2_page-0001.jpg)
+<img src="images/Other_images/Obstacle_Camera.gif" width="800">
 
 Lap counting is done by counting how many times the blue line is detected. When the blue line transitions from detected to not detected, the lap count is incremented by 1. For a few seconds after detecting the blue line, detections are ignored to prevent false double-counting when the same line briefly disappears and reappears in the camera view.
 
+
+
+Since our robot is relatively large, it often hits the wall when starting and when parking. As a result, the start succeeded only 7 out of 10 times and parking succeeded only 4 out of 10 times, which corresponds to success rates of 70% and 40%, respectively. Considering that the scores are 7 points for starting and 15 points for parking, we concluded that it is not worth attempting them at these success rates, and we decided to give up on starting and parking.
+
+### Flowchart
 <p align="center">
   <img src="images/Other_images/Flow_Chart.jpg" alt="Flow_Chart" width="45%">
 </p>

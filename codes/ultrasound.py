@@ -1,3 +1,5 @@
+"""Read front and rear HC-SR04 sensors using pigpio or an RPi.GPIO fallback."""
+
 import threading
 import time
 from statistics import median
@@ -24,6 +26,7 @@ _pigpio_instance = None
 
 
 def _get_pigpio():
+    # Cache a failed daemon connection as False to avoid retrying every reading.
     global _pigpio_instance
     if pigpio is None:
         return None
@@ -38,6 +41,7 @@ def _get_pigpio():
 
 
 class HCSR04:
+    """Measure echo round-trip time and convert it to distance in centimeters."""
     SPEED_OF_SOUND_CM_PER_SEC = 34300
 
     def __init__(self, trigger_pin=20, echo_pin=16, timeout=0.025):
@@ -68,6 +72,7 @@ class HCSR04:
         time.sleep(0.05)
 
     def _echo_callback(self, gpio, level, tick):
+        # Measure between rising and falling edges, accounting for tick wraparound.
         if level == 1:
             self._rise_tick = tick
         elif level == 0 and self._rise_tick is not None:
@@ -75,7 +80,7 @@ class HCSR04:
             self._echo_event.set()
 
     def measure_distance(self):
-        """距離をcmで返す。測定できないときは None を返す。"""
+        """Return distance in centimeters, or None if measurement fails."""
         if self.pi is not None:
             return self._measure_distance_pigpio()
         return self._measure_distance_gpio()
@@ -92,6 +97,7 @@ class HCSR04:
 
             if self._pulse_us is None:
                 return None
+            # The pulse covers travel to the object and back, so divide by two.
             distance = (self._pulse_us / 1_000_000) * self.SPEED_OF_SOUND_CM_PER_SEC / 2
             return round(distance, 2)
 
@@ -103,6 +109,7 @@ class HCSR04:
         GPIO.output(self.trigger_pin, GPIO.LOW)
 
         start_wait = time.monotonic()
+        # Bound both edge waits so a missing echo cannot block indefinitely.
         while GPIO.input(self.echo_pin) == GPIO.LOW:
             if time.monotonic() - start_wait > self.timeout:
                 return None
@@ -140,13 +147,13 @@ def _get_back_sensor():
 
 
 def init_sensors():
-    """前側と後ろ側の超音波センサーを両方初期化する。"""
+    """Initialize both the front and rear ultrasonic sensors."""
     _get_sensor()
     _get_back_sensor()
 
 
 def cleanup_sensors():
-    """前側と後ろ側の超音波センサーで使ったGPIOを解放する。"""
+    """Release GPIO resources used by both ultrasonic sensors."""
     global _sensor, _back_sensor, _pigpio_instance
     if _sensor is not None:
         _sensor.cleanup()
@@ -160,26 +167,27 @@ def cleanup_sensors():
 
 
 def us_get():
-    """今の距離をcmで返す。測定できないときは None を返す。"""
+    """Return the current front distance in centimeters, or None if measurement fails."""
     return _get_sensor().measure_distance()
 
 
 def us_back_get():
-    """後ろ側の今の距離をcmで返す。測定できないときは None を返す。"""
+    """Return the current rear distance in centimeters, or None if measurement fails."""
     return _get_back_sensor().measure_distance()
 
 
 def dis_get(samples=10, interval=0.015):
-    """距離をsamples回読んで、成功した測定値の中央値をcmで返す。"""
+    """Return the median of successful front readings from samples attempts, in centimeters."""
     return _median_distance(_get_sensor(), samples, interval)
 
 
 def dis_back_get(samples=10, interval=0.015):
-    """後ろ側の距離をsamples回読んで、成功した測定値の中央値をcmで返す。"""
+    """Return the median of successful rear readings from samples attempts, in centimeters."""
     return _median_distance(_get_back_sensor(), samples, interval)
 
 
 def _median_distance(sensor, samples, interval):
+    """Ignore failed readings and return None only if every attempt fails."""
     distances = []
 
     for index in range(samples):

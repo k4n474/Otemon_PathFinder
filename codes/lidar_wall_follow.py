@@ -1,4 +1,4 @@
-"""LiDARを使った再利用可能な壁追従走行。"""
+"""Provide reusable LiDAR wall-following control."""
 
 import time
 from collections.abc import Callable
@@ -11,7 +11,7 @@ from algorithm import (
 
 
 class WallPIDController:
-    """側壁との距離を一定に保つPID制御器。"""
+    """Keep a fixed distance from a side wall using PID control."""
 
     def __init__(
         self,
@@ -36,8 +36,10 @@ class WallPIDController:
         self.previous_error = None
 
     def update(self, wall, dt, derivative_enabled=True):
+        """Convert distance error in millimeters into a limited steering angle."""
         error = wall["wall_distance"] - self.target_distance
         self.integral += error * dt
+        # Limit stored error so prolonged saturation does not delay recovery.
         self.integral = max(
             -self.integral_limit,
             min(self.integral_limit, self.integral),
@@ -54,6 +56,7 @@ class WallPIDController:
             + (self.kd * derivative if derivative_enabled else 0.0)
         )
         side_sign = 1 if wall["side"] == "right" else -1
+        # Mirror the correction when following the opposite side of the robot.
         steering = side_sign * output
         return max(
             -self.max_steering_angle,
@@ -75,10 +78,11 @@ def follow_wall_until_front_distance(
     timeout: float = 30.0,
     wall_lost_timeout: float = 1.0,
 ) -> dict:
-    """側壁を追従し、前壁が指定距離に達したら停止する。
+    """Follow a side wall until the front distance reaches the stop threshold.
 
-    LiDARの開始・停止は呼び出し側が管理する。戻り値には停止時の
-    前壁距離、追従した側、走行時間を格納する。
+    The caller starts and stops the LiDAR. Return the front distance at the
+    stop point, the followed side, and elapsed driving time. Distances are
+    in millimeters and times are in seconds.
     """
     if front_stop_distance <= 0.0:
         raise ValueError("front_stop_distanceは0より大きくしてください")
@@ -109,7 +113,7 @@ def follow_wall_until_front_distance(
             )
 
             front_distance = measured_front_distance
-
+            # Prefer direct forward points; fall back to a fitted wall if needed.
             if front_distance is None and front_wall is not None:
                 front_distance = front_wall["front_distance"]
 
@@ -145,8 +149,8 @@ def follow_wall_until_front_distance(
             if trace_wall is None:
                 wall_missing_since = wall_missing_since or now
 
-                # RANSACが1～数フレームだけ壁を落とした場合は、最後に
-                # 正常検出した壁を短時間使い、不要な停止を防ぐ。
+                # Reuse the last valid wall briefly if RANSAC misses it for a few frames,
+                # avoiding unnecessary stops during short detection gaps.
                 if (
                     last_trace_wall is not None
                     and now - wall_missing_since < wall_lost_timeout

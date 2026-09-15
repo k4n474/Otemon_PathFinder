@@ -1,3 +1,5 @@
+"""Test background yaw integration, zeroing, and cleanup with a simulated IMU."""
+
 import time
 import unittest
 from unittest.mock import patch
@@ -6,6 +8,7 @@ import gyro
 
 
 class FakeSensor:
+    """Simulate a level sensor with a constant angular velocity around Z."""
     def __init__(self, rate_z=0.0):
         self.rate_z = rate_z
         self.closed = False
@@ -38,6 +41,7 @@ class GyroAngleReaderTest(unittest.TestCase):
         try:
             reader.initialize(calibrate=False)
             time.sleep(0.06)
+            # Sampling must advance yaw even when no caller requests an angle.
             self.assertGreater(reader.get_angle("z"), 2.0)
         finally:
             reader.close()

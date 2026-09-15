@@ -1,11 +1,11 @@
-"""LiDAR点群からRANSACで壁を検出する。"""
+"""Detect walls in LiDAR point clouds using RANSAC."""
 
 import math
 import random
 from typing import Optional
 
 
-# 前壁として扱うために必要な検出線分の長さ（mm）。
+# Minimum detected segment length for a front wall, in millimeters.
 MIN_FRONT_WALL_LENGTH = 500.0
 
 
@@ -20,13 +20,10 @@ def detect_walls(
     iterations: int = 100,
     maximum_distance: float = 3000.0
 ) -> list[dict]:
-    """
-    点群から複数の壁を検出する。
+    """Detect multiple walls by fitting lines to nearby groups of points.
 
-    座標系:
-        LiDAR正面: +Y
-        LiDAR右側: +X
-        単位: mm
+    Coordinates are in millimeters: +Y is forward and +X is right.
+    RANSAC samples candidate lines and keeps points close to the best line.
     """
 
     remaining = _to_cartesian(
@@ -78,7 +75,7 @@ def detect_walls(
         if line is None:
             break
 
-        # 最小二乗法で直線を補正した後、内点を取り直す。
+        # Recompute inliers after refining the line with least squares.
         inliers = [
             point
             for point in remaining
@@ -104,7 +101,7 @@ def detect_walls(
         )
         length = math.dist(start, end)
 
-        # 検出済みの点を除去し、次の壁を探す。
+        # Remove points already assigned to this line before searching for the next wall.
         inlier_ids = {id(point) for point in inliers}
         remaining = [
             point
@@ -116,8 +113,8 @@ def detect_walls(
             continue
 
         a, b, c = line
-        # a, bは正規化済みなので、原点から壁直線への
-        # 垂線距離は |a*0 + b*0 + c| = |c| になる。
+        # The coefficients a and b are normalized, so the perpendicular distance
+        # from the origin to the wall is |a*0 + b*0 + c| = |c|.
         perpendicular_distance = abs(c)
         closest_x = -a * c
         closest_y = -b * c
@@ -139,7 +136,7 @@ def detect_walls(
                 "x": round(closest_x, 1),
                 "y": round(closest_y, 1)
             },
-            # ロボット右方向を0°、前を90°、左を180°とする。
+            # Normal angles: right = 0 degrees, forward = 90, left = 180.
             "normal_angle": round(normal_angle, 1),
             "role": None,
             "is_front_wall": False,
@@ -166,11 +163,10 @@ def detect_front_wall(
     points: list[dict[str, float | int]],
     **wall_detection_options
 ) -> Optional[dict]:
-    """
-    垂線角度の並びから前壁と分類された壁のうち、最短を返す。
+    """Return the nearest wall classified as a front wall by normal-angle order.
 
-    front_distanceはロボット中心から壁直線へ下ろした垂線の長さ。
-    前方壁が存在しない場合はNoneを返す。
+    front_distance is the perpendicular distance from the robot center to
+    the wall line, in millimeters. Return None if no front wall is found.
     """
 
     front_walls = [
@@ -197,11 +193,11 @@ def measure_front_distance(
     half_angle: float = 15.0,
     sample_count: int = 5,
 ) -> Optional[float]:
-    """正面方向の点群から前方物体までの距離を直接測る。
+    """Measure the distance to an object directly ahead from the point cloud.
 
-    RANSACの壁分類に依存せず、正面± ``half_angle`` 度にある点の
-    前方成分を使用する。単発ノイズで停止しないよう、近い方から
-    ``sample_count`` 点の中央値を返す。
+    Use forward components of points within +/- half_angle degrees without
+    relying on RANSAC wall labels. Return the median of the nearest
+    sample_count points to reduce stops caused by isolated noise.
     """
     if not 0.0 < half_angle < 90.0:
         raise ValueError("half_angleは0より大きく90未満にしてください")
@@ -256,12 +252,10 @@ def detect_side_walls(
     detected_walls: Optional[list[dict]] = None,
     **wall_detection_options
 ) -> dict[str, Optional[dict]]:
-    """
-    左右それぞれの最長壁と、追従対象にする壁を返す。
+    """Return the longest wall on each side and the wall selected for following.
 
-    ロボット後方を0°とした壁垂線の角度が小さい順に、
-    右・前・左と分類する。
-    壁線のX/Y軸に対する角度制限は使用しない。
+    Classify walls as right, front, and left by increasing normal angle,
+    using the robot's rear as zero. Do not restrict wall angles to the axes.
     """
 
     result: dict[str, Optional[dict]] = {
@@ -290,8 +284,8 @@ def detect_side_walls(
             result[side] = {
                 **longest_wall,
                 "side": side,
-                # lineは正規化済みなので、|c|がロボット中心から
-                # 壁へ下ろした垂線距離になる。
+                # The line is normalized, so |c| is the perpendicular distance
+                # from the robot center to the wall.
                 "wall_distance": longest_wall["wall_distance"]
             }
 
@@ -316,14 +310,14 @@ def detect_front_and_side_walls(
     detected_walls: Optional[list[dict]] = None,
     **wall_detection_options
 ) -> tuple[Optional[dict], dict[str, Optional[dict]]]:
-    """同じ壁検出結果から、最短の前壁と左右の壁を返す。
+    """Return the nearest front wall and side walls from one detection result.
 
-    前壁の距離は ``front_wall["front_distance"]``、左右壁の距離は
-    ``side_walls[side]["wall_distance"]`` で取得する。すべてロボット
-    中心から壁の直線へ下ろした垂線距離で、単位はmm。
+    Read distances from front_wall["front_distance"] and
+    side_walls[side]["wall_distance"]. All distances are perpendicular
+    distances from the robot center to a wall line, in millimeters.
 
-    ``detected_walls``を渡すとRANSACをやり直さないため、前壁と左右壁が
-    必ず同じフレーム・同じ壁検出結果から選ばれる。
+    Passing detected_walls skips another RANSAC run and ensures that front
+    and side walls come from the same frame and detection result.
     """
 
     if detected_walls is None:
@@ -353,11 +347,10 @@ def detect_corners(
     *,
     endpoint_tolerance: float = 180.0
 ) -> list[dict]:
-    """
-    ほぼ直交して接続する任意方向の壁2本の交点を角として返す。
+    """Return intersections of nearly perpendicular walls as corners.
 
-    ノイズで線分端が少し欠けても検出できるよう、交点が両線分の
-    端からendpoint_tolerance以内にあれば同じ角とみなす。
+    Allow intersections within endpoint_tolerance of both segment ends so
+    small gaps caused by measurement noise do not hide a corner.
     """
 
     corners = []
@@ -406,12 +399,10 @@ def detect_corners(
 def _classify_walls_by_normal_angle(
     walls: list[dict]
 ) -> None:
-    """
-    ロボット後方を0°とした垂線角度の小さい順に、
-    右壁・前壁・左壁を割り当てる。
+    """Assign right, front, and left roles by normal angle, starting at the rear.
 
-    誤検出した短い線分に順位を奪われないよう、内点数の多い壁を
-    最大3本選んでから角度順に並べる。
+    First select up to three walls with the most inliers, then sort by angle
+    so short false detections do not displace the main walls.
     """
 
     candidates = sorted(
@@ -429,8 +420,8 @@ def _classify_walls_by_normal_angle(
     )
 
     if len(candidates) == 3:
-        # normal_angleでは270°がロボット後方。ここを分類上の
-        # 0°として、右→前→左の順に割り当てる。
+        # normal_angle places the rear at 270 degrees. Shift that to zero
+        # for classification so walls are ordered right, front, then left.
         roles = ("right", "front", "left")
     else:
         target_angles = {
@@ -584,7 +575,7 @@ def _largest_group(
     line: tuple[float, float, float],
     max_point_gap: float
 ) -> list[tuple[float, float]]:
-    """同一直線上でも離れている点群は別の壁として扱う。"""
+    """Treat separated groups of collinear points as distinct walls."""
 
     if not points:
         return []
@@ -620,7 +611,7 @@ def _largest_group(
 def _fit_line(
     points: list[tuple[float, float]]
 ) -> Optional[tuple[float, float, float]]:
-    """全最小二乗法で直線を補正する。"""
+    """Refine the wall line using total least squares."""
 
     if len(points) < 2:
         return None
@@ -663,7 +654,7 @@ def _segment_endpoints(
     direction_x = -b
     direction_y = a
 
-    # 正規化された直線上で原点に最も近い点。
+    # Find the point on the normalized line closest to the origin.
     origin_x = -a * c
     origin_y = -b * c
     projections = [
@@ -693,11 +684,10 @@ def _is_in_front_view(
     end: tuple[float, float],
     half_view_angle: float
 ) -> bool:
-    """
-    壁線分の一部が前方視野内に入っているかを返す。
+    """Return whether any part of a wall segment lies in the forward field of view.
 
-    境界線との交点も調べるため、長い壁が視野を横切る場合も
-    前方壁として判定できる。
+    Include intersections with the viewing boundaries so long walls crossing
+    the field of view can also be recognized as front walls.
     """
 
     dx = end[0] - start[0]
@@ -707,7 +697,7 @@ def _is_in_front_view(
     )
     candidates = [0.0, 1.0]
 
-    # 原点から線分への垂線の足
+    # Project the origin perpendicularly onto the segment line.
     squared_length = dx * dx + dy * dy
 
     if squared_length > 0.0:
@@ -719,7 +709,7 @@ def _is_in_front_view(
             max(0.0, min(1.0, closest_t))
         )
 
-    # 前方視野の左右境界 x = ±y*tan(30°) との交点
+    # Check intersections with the forward-view boundaries x = +/- y*tan(30 degrees).
     for side in (-1.0, 1.0):
         denominator = dx - side * tangent * dy
 
@@ -752,10 +742,9 @@ def _is_aligned_with_x_axis(
     end: tuple[float, float],
     maximum_angle: float
 ) -> bool:
-    """
-    壁線分がロボットのX軸に対してほぼ平行かを返す。
+    """Return whether the wall segment is nearly parallel to the robot's X axis.
 
-    線分には向きがないため、+X軸と-X軸を同一として扱う。
+    A segment has no direction, so treat the +X and -X axes as equivalent.
     """
 
     dx = end[0] - start[0]
@@ -777,7 +766,7 @@ def _is_aligned_with_y_axis(
     end: tuple[float, float],
     maximum_angle: float
 ) -> bool:
-    """壁線分がロボットのY軸に対してほぼ平行かを返す。"""
+    """Return whether the wall segment is nearly parallel to the robot's Y axis."""
 
     dx = end[0] - start[0]
     dy = end[1] - start[1]

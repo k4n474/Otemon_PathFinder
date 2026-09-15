@@ -216,8 +216,8 @@
     <div class="bottom-square" aria-hidden="true"></div>
 
     <script>
-        // Live ServerがRaspberry Pi以外で動く場合は、
-        // ?apiHost=192.168.x.x のようにLiDAR側のIPを指定する。
+        // If Live Server runs on a different device from the Raspberry Pi,
+        // set the LiDAR host with a query such as ?apiHost=192.168.x.x.
         const requestedApiHost =
             new URLSearchParams(location.search).get("apiHost");
 
@@ -263,13 +263,13 @@
         const centerY =
             canvas.height / 2;
 
-        // 表示最大距離
+        // Maximum displayed range, in millimeters.
         const MAXIMUM_DISTANCE = 3000;
 
-        // 向きがずれる場合に変更
+        // Adjust this angular offset, in degrees, to align the display.
         const ANGLE_OFFSET = 0;
 
-        // 左右が逆の場合はtrue
+        // Set to true if the display is mirrored left to right.
         const INVERT_ANGLE = false;
 
         const scale =
@@ -280,6 +280,7 @@
 
 
         async function updateLidar() {
+            // Skip overlapping polls when a response takes longer than the refresh interval.
             if (requesting) {
                 return;
             }
@@ -481,6 +482,7 @@
             );
         }
 
+        // Translate the parking state into the status shown above the canvas.
         function updateParkStatus(alignment) {
             if (!alignment) {
                 parkStatus.textContent =
@@ -619,6 +621,7 @@
         }
 
 
+        // Apply display orientation settings and wrap the result to [0, 360) degrees.
         function convertAngle(angle) {
             let converted = Number(angle);
 
@@ -786,6 +789,7 @@
         }
 
 
+        // Draw fitted wall segments using their robot-relative millimeter coordinates.
         function drawWalls(walls) {
             ctx.lineWidth = 5;
             ctx.lineCap = "round";
@@ -1015,6 +1019,7 @@
 
         updateLidar();
 
+        // Poll at 10 Hz; updateLidar prevents concurrent requests.
         setInterval(
             updateLidar,
             100

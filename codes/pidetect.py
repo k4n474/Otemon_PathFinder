@@ -1,7 +1,6 @@
-"""
-カメラ検知だけを確認するための実行ファイル。
+"""Run camera detection on its own for inspection.
 
-実際のメイン制御は main_program.py から camera_detector を読み込んで使う。
+Driving controllers import camera_detector directly to use the same detections.
 """
 
 import cv2
@@ -10,17 +9,15 @@ from camera_detector import BOTTOM_EXCLUSION_SIZE, FRAME_SIZE, PiColorDetector, 
 
 
 FAR_OBJECT_AREA_MAX = 3500
-# False: 赤・緑・マゼンタの検知枠、白コート、青ラインだけを描画。
-# True: オブジェクトの座標・サイズ、補助線、FPS、除外範囲の枠なども描画。
+# False: draw only red/green/magenta boxes, the white court, and the blue line.
+# True: also draw coordinates, sizes, guide lines, FPS, and exclusion boundaries.
 SHOW_DEBUG_OVERLAYS = True
-# True: コート内の赤・緑・マゼンタだけを採用。False: コートによる絞り込みをしない。
-# Falseではコートの検出・表示も無効にする。
+# True: accept colored objects only inside the court. False: skip court filtering.
+# Disabling this also skips court detection and its overlay.
 FILTER_OBJECTS_ON_COURT = True
 
 def classify_obj_position(obj):
-    """
-    検出したオブジェクトを6箇所のどれかに分類する。
-    """
+    """Classify a detected object into one of six image regions."""
     frame_width, frame_height = FRAME_SIZE
     center_x, center_y = obj["center"]
     area = obj["area"]
@@ -96,7 +93,7 @@ def main():
             position_lines = build_position_lines(result)
 
             print(status, end="   \r")
-            # 検出結果の画像を変更せず、プレビュー用のコピーに描画する。
+            # Draw on a preview copy to preserve the original detection image.
             preview_frame = result["annotated_frame"].copy()
             height, width = preview_frame.shape[:2]
             rectangle_width = min(BOTTOM_EXCLUSION_SIZE[0], width)

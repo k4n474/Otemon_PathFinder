@@ -1,8 +1,11 @@
+"""Manually test the motor by alternating forward and reverse every second."""
+
 from gpiozero import PWMOutputDevice
 from time import sleep
 from gpiozero import Servo
 from newobot import dc_motor, set_angle, stop, cleanup
 
+# Previous direct DRV8871 control example; the active test uses newobot.
 # # DRV8871
 # motor_in1 = PWMOutputDevice(5, frequency=1000)
 # motor_in2 = PWMOutputDevice(6, frequency=1000)
@@ -34,7 +37,7 @@ try:
 
 
 finally:
-
+    # Stop the motor and release its GPIO devices even after Ctrl+C.
     stop()
 
     cleanup()

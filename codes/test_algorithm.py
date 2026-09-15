@@ -1,3 +1,5 @@
+"""Check wall geometry and noise handling with synthetic LiDAR measurements."""
+
 import math
 import unittest
 
@@ -12,6 +14,7 @@ from algorithm import (
 
 
 def point(x, y):
+    """Convert robot coordinates in millimeters to a polar LiDAR measurement."""
     return {
         "angle": math.degrees(math.atan2(x, y)) % 360.0,
         "distance": math.hypot(x, y)
@@ -20,6 +23,7 @@ def point(x, y):
 
 class WallAxisDetectionTest(unittest.TestCase):
     def setUp(self):
+        # Build a front wall 1000 mm ahead and side walls 600 mm from the center.
         self.points = []
         self.points.extend(
             point(x, 1000.0)

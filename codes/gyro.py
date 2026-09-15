@@ -155,6 +155,8 @@ class MPU9250:
         return {axis: raw[axis] - self.gyro_bias[axis] for axis in raw}
 
     def read_motion(self) -> tuple[dict[str, float], dict[str, float]]:
+        """Read acceleration in g and bias-corrected rotation in degrees per second."""
+        # One contiguous read keeps acceleration and gyro samples close in time.
         data = self.read_i2c_block(ACCEL_XOUT_H, 14)
         accel = {
             "x": self._to_signed(data[0], data[1]) / ACCEL_SCALE,
@@ -190,6 +192,7 @@ class MPU9250:
             return None
 
     def calibrate_gyro(self, samples: int = 200) -> None:
+        # Average stationary readings to estimate each axis's zero-rate offset.
         print("Calibrating gyro. Keep the sensor still...")
         total = {"x": 0.0, "y": 0.0, "z": 0.0}
 
@@ -291,6 +294,8 @@ class GyroAngleReader:
                     # A process stall must not create one large, bogus angle jump.
                     dt = min(max(dt, 0.0), MAX_INTEGRATION_INTERVAL_SECONDS)
                     acc_roll, acc_pitch = accel_angles(accel)
+                    # Blend gyro integration with gravity-based roll and pitch.
+                    # Yaw has no gravity reference, so integrate its gyro rate alone.
                     self.angles["x"] = self.alpha * (
                         self.angles["x"] + gyro["x"] * dt
                     ) + (1.0 - self.alpha) * acc_roll
@@ -321,6 +326,7 @@ class GyroAngleReader:
             return self.angles[axis] - self.offsets[axis]
 
     def reset_angle(self, axis: str | None = None) -> None:
+        # Store an offset without interrupting background integration.
         self.initialize()
         if axis is None:
             with self._lock:
@@ -369,6 +375,7 @@ def get_angle(axis: str) -> float:
       print(get_angle("z"))
     """
 
+    # Reverse the sensor sign to match the driving controller's convention.
     return get_reader().get_angle(axis) * -1
 
 

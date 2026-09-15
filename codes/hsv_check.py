@@ -1,4 +1,4 @@
-"""カメラ中央の画素のHSV値を継続表示する確認プログラム。"""
+"""Continuously display the HSV value of the center camera pixel."""
 
 import cv2
 
@@ -14,7 +14,7 @@ HSV_TEXT_COLOR = (255, 255, 255)
 
 
 def read_center_hsv(frame):
-    """フレーム中央の座標と、その画素のOpenCV形式HSV値を返す。"""
+    """Return the frame center coordinates and its pixel value in OpenCV HSV format."""
     frame_height, frame_width = frame.shape[:2]
     center = (frame_width // 2, frame_height // 2)
     center_x, center_y = center
@@ -27,7 +27,7 @@ def read_center_hsv(frame):
 
 
 def draw_center_hsv(frame, center, hsv):
-    """中央点とHSV値をフレームへ描画する。"""
+    """Draw the center marker and HSV values on the frame."""
     hue, saturation, value = hsv
     cv2.circle(
         frame,
@@ -84,6 +84,7 @@ def main():
         while True:
             result = detector.process_once()
             center, hsv = read_center_hsv(result["frame"])
+            # Add the HSV readout to a copy so detector results remain reusable.
             annotated_frame = result["annotated_frame"].copy()
             draw_center_hsv(annotated_frame, center, hsv)
 

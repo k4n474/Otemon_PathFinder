@@ -1,6 +1,4 @@
-"""
-メイン制御から読み込んで使うためのカメラ検知モジュール。
-"""
+"""Provide camera detection results for the main driving controller."""
 
 from pathlib import Path
 from threading import Condition, Thread
@@ -22,7 +20,7 @@ FRAME_SIZE = (480,270)# (320, 180)(640, 360)(960, 540)
 BOTTOM_EXCLUSION_SIZE = (64, 48)
 CAMERA_NUM = 0
 DEFAULT_IGNORE_BELOW_Y = None
-# main は処理用の軽い出力サイズ、raw は広い画角を保つためのセンサー読み出しサイズ。
+# Use a small main stream for processing and a wide raw readout to preserve the field of view.
 RAW_SENSOR_SIZE = (4608, 2592)
 RECORDING_FPS = 20.0
 MIN_AREA = 50
@@ -80,8 +78,8 @@ WHITE_COURT_LINE_MIN_SATURATION = 70
 WHITE_COURT_LINE_MIN_VALUE = 65
 WHITE_COURT_OUTLINE_COLOR = (0, 255, 255)
 
-# ガイド枠はこの2つの数値を変えるだけで調整できます。
-# 左枠の左下頂点、右枠の右下頂点は必ず画面の角に固定されます。
+# Adjust these two dimensions to resize the guide boxes.
+# Anchor the outer bottom corners of the left and right boxes to the image corners.
 GUIDE_BOX_WIDTH = 140
 GUIDE_BOX_HEIGHT = 240
 
@@ -92,15 +90,15 @@ COLOR_RULES = {
         "value_range": (40, 255),
     },
     "green": {
-        # 以前のgreen.npyから計算されていた範囲（中心H=61、前後6）。
+        # Use the range previously derived from green.npy: H = 61 +/- 6.
         "hue_ranges": ((55, 67),),
         "saturation_range": (35, 255),
         "value_range": (22, 255),
     },
-    # RGB (255, 0, 255) は OpenCV の HSV では H=150 になる。
-    # カメラの色ずれも吸収できるよう、前後に余裕を持たせて検出する。
+    # RGB (255, 0, 255) corresponds to H = 150 in OpenCV HSV.
+    # Allow some hue variation to accommodate camera color shifts.
     "magenta": {
-        # 黒い壁に映る暗い反射を除外しつつ、遠方の実物は小面積でも残す。
+        # Reject dark reflections on black walls while keeping small, distant magenta objects.
         "hue_ranges": ((138, 172),),
         "saturation_range": (100, 255),
         "value_range": (60, 255),
@@ -136,7 +134,7 @@ def create_mask(hsv, color_name):
 
 
 def detect_white_court(frame, valid_mask=None):
-    """白い床と色付きラインを結合し、最大領域をコートとして検出する。"""
+    """Merge the white floor and colored lines; use the largest region as the court."""
     frame_h, frame_w = frame.shape[:2]
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     white_mask = cv2.inRange(
@@ -168,8 +166,8 @@ def detect_white_court(frame, valid_mask=None):
         ),
         np.array([WHITE_COURT_ORANGE_HUE_RANGE[1], 255, 255], dtype=np.uint8),
     )
-    # コート上の色付きラインで白領域が分断されないよう、
-    # 青線とオレンジ線もコート面として結合する。
+    # Include blue and orange court lines in the floor mask so colored tape
+    # does not split the white court into disconnected regions.
     mask = cv2.bitwise_or(white_mask, blue_mask)
     mask = cv2.bitwise_or(mask, orange_mask)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
@@ -193,8 +191,8 @@ def detect_white_court(frame, valid_mask=None):
         return None
 
     contour = max(candidates, key=cv2.contourArea)
-    # コート端にある物体で白領域が隠れても、その部分をコート外にしない。
-    # コートは画面上でほぼ凸形状になるため、凸包で輪郭の欠けを補完する。
+    # Objects at court edges can hide parts of the white floor.
+    # Fill contour gaps with a convex hull because the court is approximately convex in the image.
     court_contour = cv2.convexHull(contour)
     perimeter = cv2.arcLength(court_contour, True)
     outline = cv2.approxPolyDP(court_contour, perimeter * 0.01, True)
@@ -221,7 +219,7 @@ def draw_white_court(frame, court):
 
 
 def filter_objects_on_court(objects, court, frame_shape):
-    """コート領域と1ピクセル以上重なる物体だけを残す。"""
+    """Keep only objects that overlap the court mask by at least one pixel."""
     if court is None:
         return []
 
@@ -238,7 +236,7 @@ def filter_objects_on_court(objects, court, frame_shape):
 
 
 def object_front_priority(obj):
-    """画面上の低さを優先し、同じ高さの場合だけ面積で比較する。"""
+    """Prioritize objects lower in the image, using area only to break ties."""
     _x, y, _w, h = obj["bbox"]
     return (y + h, obj["area"])
 
@@ -409,11 +407,11 @@ def detect_boundary_by_row_scan(gray, roi_top, frame_w):
 
 
 def detect_wall_floor_boundary(frame):
-    """
-    正面の黒い壁と床の境界線を推定する。
+    """Estimate the boundary between the front black wall and the floor.
 
-    戻り値は画像座標の line=(x1, y1, x2, y2)、傾き angle_deg、
-    中央付近の y 座標 y_at_center、confidence を含む dict。見つからない場合は None。
+    Return a dict with image-coordinate line=(x1, y1, x2, y2), slope
+    angle_deg, center height y_at_center, and confidence; return None
+    when no boundary is found.
     """
     frame_h, frame_w = frame.shape[:2]
     roi_top = int(frame_h * BOUNDARY_ROI_TOP_RATIO)
@@ -425,7 +423,7 @@ def detect_wall_floor_boundary(frame):
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    # 黒い壁と床の明るさ差を主な手がかりにする。柱の赤/緑には依存しない。
+    # Use wall-to-floor brightness contrast rather than red or green pillar colors.
     edges = cv2.Canny(gray, 40, 120)
     min_line_length = int(frame_w * BOUNDARY_MIN_LINE_LENGTH_RATIO)
     lines = cv2.HoughLinesP(
@@ -528,7 +526,7 @@ def draw_blue_line_crossing_count(frame, count):
 
 
 def detect_blue_line(frame, valid_mask=None, court_mask=None):
-    """青いテープを検出する。court_mask指定時はコートと重なる候補に限る。"""
+    """Detect blue tape, requiring court overlap when court_mask is provided."""
     frame_h, frame_w = frame.shape[:2]
     roi_top = int(frame_h * BLUE_LINE_ROI_TOP_RATIO)
     hsv = cv2.cvtColor(frame[roi_top:, :], cv2.COLOR_BGR2HSV)
@@ -639,9 +637,10 @@ def format_blue_line(blue_line):
 
 
 def build_primary_target_line(primary, frame):
-    """
-    一番手前の物体から画面下端へ引く線の終点と角度を返す。
-    角度は垂直を0度、右傾きを負、左傾きを正として±90度で表す。
+    """Return endpoints and the angle of the line from the nearest object to the bottom.
+
+    Angles range from -90 to +90 degrees: vertical is zero, a right lean is
+    negative, and a left lean is positive.
     """
     if primary is None:
         return None
@@ -697,10 +696,10 @@ def draw_primary_target_line(frame, target_line):
 
 
 def build_black_wall_probe_line(primary, frame, direction=1):
-    """物体の色に応じた外側から、進行方向側の画面下端へ検査線を引く。
+    """Draw a probe from outside the object to the bottom on the travel-direction side.
 
-    物体側は赤なら右、緑なら左に置く。画面下端側は従来どおり
-    ``direction`` に応じた位置を使用する。
+    Place the object endpoint to the right of red objects or left of green
+    objects. The bottom endpoint follows direction.
     """
     if primary is None:
         return None
@@ -728,7 +727,7 @@ def build_black_wall_probe_line(primary, frame, direction=1):
 
 
 def build_search_black_wall_probe_line(frame, direction):
-    """find_obj用に、進行方向側の画面下部へ短い縦の検査線を置く。"""
+    """Place a short vertical probe near the bottom on the search-direction side."""
     frame_height, frame_width = frame.shape[:2]
     x = (
         frame_width - 1 - BLACK_WALL_PROBE_END_X
@@ -741,7 +740,7 @@ def build_search_black_wall_probe_line(frame, direction):
 
 
 def measure_black_wall_ratio(frame, probe_line=None, valid_mask=None):
-    """検査線の周囲を黒い画素が占める割合を0.0〜1.0で返す。"""
+    """Return the fraction of black pixels around the probe, from 0.0 to 1.0."""
     if probe_line is None:
         return 0.0
 
@@ -766,7 +765,7 @@ def measure_black_wall_ratio(frame, probe_line=None, valid_mask=None):
 
 
 def detect_black_wall_on_probe(frame, probe_line=None):
-    """検査線の周囲を黒い画素が一定割合以上占めるか判定する。"""
+    """Check whether the fraction of black pixels around the probe meets the threshold."""
     return measure_black_wall_ratio(frame, probe_line) >= BLACK_WALL_MIN_RATIO
 
 
@@ -825,6 +824,7 @@ def choose_primary_detection(red_objects, green_objects):
 
 
 class PiColorDetector:
+    """Capture and detect in a background thread for driving and preview consumers."""
     def __init__(
         self,
         sample_dir=DEFAULT_SAMPLE_DIR,
@@ -868,7 +868,7 @@ class PiColorDetector:
         self.blue_line_crossing_count = 0
         self.black_wall_probe_direction = 1
         self.search_black_wall_probe_enabled = False
-        # 画面の下1/3は物体検出の対象外にする。
+        # Exclude the bottom third of the image from object detection.
         self.ignore_below_y = DEFAULT_IGNORE_BELOW_Y
 
     def start(self):
@@ -966,6 +966,7 @@ class PiColorDetector:
                 self._recording_writer.write(result["annotated_frame"])
 
             with self._result_condition:
+                # Publish the completed result before waking waiting consumers.
                 self._latest_result = result
                 self._latest_result_id += 1
                 self._result_condition.notify_all()
@@ -975,6 +976,7 @@ class PiColorDetector:
                 time.sleep(frame_interval - elapsed)
 
     def _capture_and_detect(self):
+        """Capture one frame, detect scene features, and build control and preview data."""
         if self.camera is None:
             raise RuntimeError("PiColorDetector.start() を先に呼んでください。")
 
@@ -990,6 +992,7 @@ class PiColorDetector:
         self._last_fps_time = captured_at
 
         frame = self.camera.capture_array()
+        # Picamera2 supplies RGB; the OpenCV processing below expects BGR.
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         valid_mask = None
         if self.bottom_exclusion_size is not None:
@@ -1001,13 +1004,13 @@ class PiColorDetector:
             valid_mask[frame_h - excluded_h:, left:left + excluded_w] = 0
         display_frame = frame.copy()
         if valid_mask is not None:
-            # 除外範囲の色がぼかしで周囲へ混ざるのを防ぐ。
+            # Mask before blurring so excluded colors do not bleed into neighboring pixels.
             frame[valid_mask == 0] = 0
         frame = cv2.GaussianBlur(frame, (5, 5), 0)
         court = detect_white_court(frame, valid_mask) if self.detect_court_enabled else None
         court_mask = None
         if self.detect_court_enabled:
-            # コート未検出時は青線も採用しない。
+            # Reject blue-line candidates when the court has not been detected.
             court_mask = court["mask"] if court is not None else np.zeros(frame.shape[:2], dtype=np.uint8)
         blue_line, blue_line_mask = detect_blue_line(frame, valid_mask, court_mask)
         if self.detect_objects_enabled:
@@ -1042,7 +1045,7 @@ class PiColorDetector:
             green_objects = []
             magenta_objects = []
         boundary = detect_wall_floor_boundary(frame) if self.detect_boundary_enabled else None
-        # マゼンタは表示専用。走行用ターゲット線の対象にはしない。
+        # Show magenta detections in the preview, but do not use them for driving target lines.
         primary = choose_primary_detection(red_objects, green_objects)
         target_line = build_primary_target_line(primary, frame)
         if self.search_black_wall_probe_enabled:
@@ -1094,7 +1097,7 @@ class PiColorDetector:
                     black_wall_on_probe,
                     black_wall_probe_line,
                 )
-                # 回避制御の切り替え位置をプレビュー・録画に表示する。
+                # Show where avoidance control switches mode in the preview and recording.
                 for guide_y in (150, 200):
                     cv2.line(
                         annotated_frame,

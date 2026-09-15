@@ -1,9 +1,9 @@
-"""障害物競技で使うロボットの走行制御。
+"""Control the robot during the obstacle challenge.
 
-処理の流れは大きく次の3段階に分かれる。
-1. カメラで走行対象を探す
-2. 対象物と黒壁を避けながら青線の検出回数を数える
-3. 規定回数の青線と競技ごとの追加条件を満たしたら停止する
+The run has three main stages:
+1. Find a target object with the camera.
+2. Avoid objects and black walls while counting blue-line crossings.
+3. Stop after the required crossings and challenge-specific finish conditions.
 """
 
 import time
@@ -24,48 +24,48 @@ from button import button_sleep
 from lidar_read import LidarReader
 from lidar_wall_follow import follow_wall_until_front_distance
 from park import start_parking
-# 機器の初期化
+# Initialize hardware interfaces.
 # ---------------------------------------------------------------------------
 
 lidar = LidarReader(scan_frequency_increase_hz=6)
 
 # ---------------------------------------------------------------------------
-# 走行設定
+# Driving settings.
 # ---------------------------------------------------------------------------
 
 
-# ジャイロを使った旋回走行
-GYRO_TURN_TIMEOUT_SECONDS = 20.0  # ジャイロ旋回を強制終了するまでの最大秒数
+# Gyro-controlled turns.
+GYRO_TURN_TIMEOUT_SECONDS = 20.0  # Maximum duration of a gyro turn, in seconds.
 
 
-# 障害物・壁回避のPD制御
-AVOID_GREEN_TARGET_ANGLE = -40  # 緑オブジェクト回避時の目標線角度（度）
-AVOID_RED_TARGET_ANGLE = 45  # 赤オブジェクト回避時の目標線角度（度）
-AVOID_GREEN_TARGET_ANGLE_BELOW_150 = -35  # 物体中心Yが150を超えたときの緑の目標線角度（度）
-AVOID_RED_TARGET_ANGLE_BELOW_150 = 40  # 物体中心Yが150を超えたときの赤の目標線角度（度）
-AVOID_STEERING_MAX = 30  # 37 オブジェクト回避で許可する最大操舵角（度）
-AVOID_WALL_STEERING_ANGLE = 30.0  # 黒壁を検知したときの固定操舵角（度）
-AVOID_KP = 1.5  # 目標線の角度ずれに対する比例補正の強さ 1.5
-AVOID_KD = 0.1# 目標線の角度変化に対する微分補正の強さ
-AVOID_HOLD_STEERING_BELOW_Y = 200  # 物体中心がこのY座標より下なら直進または操舵角維持へ切り替える
-AVOID_STRAIGHT_ANGLE_TOLERANCE = 5.0  # 目標線角度が目標角の±この値以内なら直進する（度）
-AVOID_WALL_STEERING_UPDATE_MIN = 0.5  # 壁回避の操舵を更新する最小角度差（度）
-AVOID_POWER_BOOST_STEERING_THRESHOLD = 30  # パワーを上げる操舵角の境界値（度）
-AVOID_POWER_BOOST = 0  # 急操舵時にモーターパワーへ加える値
+# PD control for object and wall avoidance.
+AVOID_GREEN_TARGET_ANGLE = -40  # Target line angle when avoiding a green object, in degrees.
+AVOID_RED_TARGET_ANGLE = 45  # Target line angle when avoiding a red object, in degrees.
+AVOID_GREEN_TARGET_ANGLE_BELOW_150 = -35  # Green target angle when the object center has Y > 150 pixels.
+AVOID_RED_TARGET_ANGLE_BELOW_150 = 40  # Red target angle when the object center has Y > 150 pixels.
+AVOID_STEERING_MAX = 30  # Maximum steering angle during object avoidance, in degrees.
+AVOID_WALL_STEERING_ANGLE = 30.0  # Fixed steering angle for black-wall avoidance, in degrees.
+AVOID_KP = 1.5  # Proportional gain for target-line angle error.
+AVOID_KD = 0.1# Derivative gain for changes in target-line angle.
+AVOID_HOLD_STEERING_BELOW_Y = 200  # Below this image Y coordinate, drive straight or hold the steering angle.
+AVOID_STRAIGHT_ANGLE_TOLERANCE = 5.0  # Drive straight when the target-line angle is within this tolerance, in degrees.
+AVOID_WALL_STEERING_UPDATE_MIN = 0.5  # Minimum angle change needed to update wall-avoidance steering, in degrees.
+AVOID_POWER_BOOST_STEERING_THRESHOLD = 30  # Steering-angle threshold for increasing motor power, in degrees.
+AVOID_POWER_BOOST = 0  # Extra motor power during sharp steering.
 
-# 後退確認
-BACK_CHECK_AREA_THRESHOLD = 2000  # 後退が必要と判定する物体の最小面積
-BACK_CHECK_SECONDS = 1.25  # 後退を継続する秒数
+# Initial backup check.
+BACK_CHECK_AREA_THRESHOLD = 2000  # Minimum object area in pixels required to trigger a backup.
+BACK_CHECK_SECONDS = 1.25  # Duration of the backup maneuver, in seconds.
 
 
-# 青線の検出判定
-BLUE_LINE_COOLDOWN_SECONDS = 2.5  # 同じ青線の二重計上を防ぐ無視時間（秒）
-BLUE_LINE_CROSSING_TARGET = 12  # 終了判定を開始する青線の目標通過回数
-BLUE_LINE_LOST_CONFIRM_SECONDS = 1.5  # direction=0で青線消失を確定する秒数
-BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE = 2  # direction=1で青線消失を確定する秒数
+# Blue-line crossing detection.
+BLUE_LINE_COOLDOWN_SECONDS = 2.5  # Ignore interval after a crossing to prevent duplicate counts, in seconds.
+BLUE_LINE_CROSSING_TARGET = 12  # Required crossing count before checking finish conditions.
+BLUE_LINE_LOST_CONFIRM_SECONDS = 1.5  # Required blue-line absence for direction=0, in seconds.
+BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE = 2  # Required blue-line absence for direction=1, in seconds.
 
-# 障害物競技中に常時点灯する後方ライト
-REAR_LIGHT_PIN = 21  # 後方ライトを接続するGPIO番号（BCM）
+# Keep the rear light on throughout the obstacle challenge.
+REAR_LIGHT_PIN = 21  # BCM GPIO pin connected to the rear light.
 
 detector = PiColorDetector(
     enable_recording=True,
@@ -76,7 +76,7 @@ detector = PiColorDetector(
 from newobot import dc_motor, set_angle, stop, cleanup
 
 # ---------------------------------------------------------------------------
-# 走行中に引き継ぐ状態
+# State shared across driving phases.
 # ---------------------------------------------------------------------------
 
 blue_line_crossing_count = 0
@@ -92,7 +92,7 @@ def drive_along_wall_until_front_distance(
     trace_side=None,
     timeout=30.0,
 ):
-    """側壁との距離を保ち、前壁が指定距離に達するまで走行する。"""
+    """Keep the side-wall distance until the front wall reaches the specified distance."""
     started_lidar_here = not lidar.running
 
     try:
@@ -121,12 +121,11 @@ def gyro_turn(
     duty_cycle,
     timeout=GYRO_TURN_TIMEOUT_SECONDS,
 ):
-    """指定した操舵角で走り、ヨー角が目標に達したら停止する。
+    """Drive at a fixed steering angle until yaw reaches the target, then stop.
 
-    ``target_angle`` の符号でジャイロの旋回方向を指定する。
-    ``steering_angle`` の符号は到達判定には使用しない。
-    ジャイロはこの関数内ではリセットせず、最後にリセットした時点からの
-    ヨー角を ``target_angle`` と比較する。
+    The sign of target_angle determines the gyro turn direction; the sign
+    of steering_angle is not used for the completion check. Compare yaw
+    against target_angle relative to the last gyro reset; do not reset here.
     """
     if timeout <= 0:
         raise ValueError("timeout は0より大きくしてください。")
@@ -168,11 +167,10 @@ def gyro_turn(
 
 
 def update_blue_line_crossing(result):
-    """
-    青線が見えていない状態から見えたとき、検出回数を増やす。
-    カウント後は一定時間青線を無視し、同じ線の再検出による二重計上を防ぐ。
+    """Count a crossing when a blue line changes from invisible to visible.
 
-    カウンターはavoid_objを抜けても保持されるため、走行開始からの合計になる。
+    Ignore blue lines briefly after each count to avoid counting the same
+    line twice. The counter persists across avoid_obj calls for the full run.
     """
     global blue_line_crossing_count
     global blue_line_was_detected
@@ -204,10 +202,11 @@ def blue_line_finish_reached(
     result=None,
     require_magenta_absent=False,
 ):
-    """青線が目標回数に達し、追加の終了条件も満たしたか判定する。
+    """Check the blue-line crossing target and any additional finish conditions.
 
-    ``require_magenta_absent`` が有効な場合は、周回方向ごとに決めた時間、
-    最後の青線が連続して見えなくなった後、マゼンタの個数を判定する。
+    If require_magenta_absent is enabled, wait until the last blue line has
+    stayed invisible for the direction-specific duration, then check the
+    number of magenta objects.
     """
     if blue_line_crossing_count < BLUE_LINE_CROSSING_TARGET:
         return False
@@ -268,7 +267,7 @@ def blue_line_finish_reached(
 
 
 def select_front_object(result):
-    """検出結果から、画面の一番下に映っている物体を選ぶ。"""
+    """Select the red or green object that appears lowest in the image."""
     candidates = []
     for red_object in result["red_objects"]:
         candidates.append(("red", red_object))
@@ -283,10 +282,10 @@ def select_front_object(result):
 
 
 def back_check(power, keep_camera_running=False):
-    """1フレーム確認し、必要なら後退してマゼンタの左右を返す。
+    """Check one frame, back up if needed, and return the magenta object's side.
 
     Returns:
-        int | None: マゼンタが画面左側なら0、右側なら1、未検出なら0。
+        int: 0 if magenta is on the left or absent; 1 if it is on the right.
     """
     started_detector_here = detector.camera is None
     try:
@@ -317,7 +316,7 @@ def back_check(power, keep_camera_running=False):
 
 
 def select_front_magenta_object(result):
-    """検出したマゼンタのうち、画面上で最も手前の物体を選ぶ。"""
+    """Select the detected magenta object that appears closest in the image."""
     objects = result.get("magenta_objects", [])
     return max(objects, key=object_front_priority) if objects else None
 
@@ -329,12 +328,11 @@ def find_obj(
     finish_delay_seconds=0.0,
     require_magenta_absent=False,
 ):
-    """
-    最初に停止状態でカメラを確認し、オブジェクトが映っていない場合だけ
-    ステアリングを切って前進しながら探索する。
+    """Check the camera while stopped, then steer and drive to search if needed.
 
     Returns:
-        str | None: 見つけた色名。中断されたら None
+        str | None: The detected color, or None when the finish conditions
+        are met. KeyboardInterrupt stops the robot and is re-raised.
     """
     if rd not in (0, 1):
         raise ValueError("find_obj の rd は0または1にしてください。")
@@ -358,8 +356,8 @@ def find_obj(
                 set_angle(0)
                 return None
 
-            # rd=0は右下、rd=1は左下の固定検査線を使う。
-            # 黒が15%以上ある間は、壁と反対方向へ30度操舵する。
+            # Use a fixed lower-right probe for rd=0 and lower-left probe for rd=1.
+            # Steer away from the wall while the black-pixel fraction meets the detector threshold.
             if result.get("black_wall_on_probe", False):
                 wall_steering = (
                     -AVOID_WALL_STEERING_ANGLE
@@ -374,7 +372,7 @@ def find_obj(
                     search_started = True
                 continue
 
-            # 壁が検査線から消えたら、通常の探索方向へ戻す。
+            # Resume the normal search direction once the wall leaves the probe.
             if wall_avoiding:
                 normal_steering = steering_angle if rd == 0 else -steering_angle
                 set_angle(normal_steering)
@@ -412,11 +410,11 @@ def avoid_obj(
     finish_delay_seconds=0.0,
     require_magenta_absent=False,
 ):
-    """
-    物体のPD回避と黒壁回避を、1回のカメラ取得ループ内で実行する。
+    """Handle object PD avoidance and black-wall avoidance in one camera loop.
 
-    direction=1は現在の検査線位置と右操舵、direction=0は検査線位置を
-    左右反転して左操舵する。壁検知が消えたら物体のPD制御へ戻る。
+    direction=1 uses the default probe position and right steering;
+    direction=0 mirrors the probe and steers left. Resume object PD control
+    once the black wall is no longer detected.
     """
     if direction not in (0, 1):
         raise ValueError("avoid_obj の direction は0または1にしてください。")
@@ -428,7 +426,7 @@ def avoid_obj(
     previous_color = None
     previous_wall_steering = None
     previous_target_angle = None
-    # 呼び出し元の探索処理は操舵角0で終了する。壁回避ではこの値を上書きしない。
+    # The search ends at zero steering; keep this saved angle separate from wall avoidance.
     object_steering = 0.0
     current_duty_cycle = duty_cycle
     buzzer_active = False
@@ -451,7 +449,7 @@ def avoid_obj(
             set_angle(0)
             return
 
-        # 黒壁が見えている間は、物体より壁の回避を優先する。
+        # Give black-wall avoidance priority over object avoidance while the wall is visible.
         if result.get("black_wall_on_probe", False):
             if buzzer_active:
                 buzzer_stop()
@@ -468,7 +466,7 @@ def avoid_obj(
                 set_angle(wall_steering)
                 previous_wall_steering = wall_steering
 
-            # 壁回避後に微分項が急増しないよう、PD履歴をリセットする。
+            # Reset PD history to prevent a derivative spike after wall avoidance.
             previous_error = None
             previous_time = None
             previous_color = None
@@ -510,7 +508,7 @@ def avoid_obj(
             if abs(error) <= AVOID_STRAIGHT_ANGLE_TOLERANCE:
                 set_angle(0)
                 object_steering = 0.0
-            # 許容範囲外では角度を維持し、壁回避後は壁検知前の角度へ戻す。
+            # Outside the tolerance, hold the saved angle; restore it after wall avoidance.
             elif wall_just_cleared:
                 set_angle(object_steering)
             previous_error = None
@@ -583,7 +581,7 @@ def _run_obstacle_challenge(
     finish_delay_seconds=0.0,
     require_magenta_absent=False,
 ):
-    """指定した終了遅延で障害物競技を実行する。"""
+    """Run the obstacle challenge with the specified finish delay."""
     finish_state = {
         "finish_at": None,
         "direction": direction,
@@ -592,13 +590,13 @@ def _run_obstacle_challenge(
         "magenta_condition_met": False,
     }
     try:
-        # back_checkから動作中のカメラを引き継いだ場合は再初期化しない。
+        # Reuse the running camera when it was passed on by back_check.
         if detector.camera is None:
             detector.start()
         # lidar.start()
 
         while True:
-            # 対象物が見つかるまで探索する。
+            # Search until a target object is found.
             find_obj(
                 power ,
                 direction,
@@ -614,7 +612,7 @@ def _run_obstacle_challenge(
             ):
                 break
 
-            # 見つけた対象物と壁を回避する。
+            # Avoid the detected target and nearby walls.
             avoid_obj(
                 power,
                 direction,
@@ -651,7 +649,7 @@ def _run_obstacle_challenge(
 
 
 def obstacle_challenge(power, direction):
-    """np版と同じ青線消失時間・マゼンタ個数の条件で停止する。"""
+    """Stop using the same blue-line absence and magenta-count rules as the np variant."""
     _run_obstacle_with_rear_light(
         power,
         direction,
@@ -665,7 +663,7 @@ def _run_obstacle_with_rear_light(
     finish_delay_seconds=0.0,
     require_magenta_absent=False,
 ):
-    """後方ライトを点灯し、障害物競技終了時に必ず消灯する。"""
+    """Keep the rear light on during the challenge and always switch it off afterward."""
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(REAR_LIGHT_PIN, GPIO.OUT, initial=GPIO.LOW)
     GPIO.output(REAR_LIGHT_PIN, GPIO.HIGH)
@@ -681,7 +679,7 @@ def _run_obstacle_with_rear_light(
 
 
 def obstacle_challenge_np(power):
-    """周回方向別の青線消失時間とマゼンタ個数で停止する。"""
+    """Stop using direction-specific blue-line absence times and magenta counts."""
     # button_sleep()
     try:
         direction = back_check(
@@ -714,34 +712,10 @@ def out_park(direction):
     stop()
 
 def main():
-    GPIO.setmode(GPIO.BCM)
     
-    GPIO.setup(20, GPIO.OUT, initial=GPIO.LOW)
-    GPIO.setup(16, GPIO.OUT, initial=GPIO.LOW)
-    GPIO.output(20, GPIO.HIGH)
-    GPIO.output(16, GPIO.HIGH)
-
-    GPIO.setup(REAR_LIGHT_PIN, GPIO.OUT, initial=GPIO.LOW)
-    GPIO.output(REAR_LIGHT_PIN, GPIO.HIGH)
-    
-    # button_sleep()
-
-    GPIO.output(20, GPIO.LOW)
-    GPIO.output(16, GPIO.LOW)
-    time.sleep(0.5)
-
-    
-    # out_park(0)    
+    button_sleep()
     obstacle_challenge_np(30)
     stop()
 
-    GPIO.output(20, GPIO.HIGH)
-    GPIO.output(16, GPIO.HIGH)
-    GPIO.output(REAR_LIGHT_PIN, GPIO.HIGH)
-
-    # dc_motor(35)
-    # time.sleep(1)
-    # stop()
-    # start_parking(1).join()
 if __name__ == "__main__":
     main()

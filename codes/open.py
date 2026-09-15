@@ -1,4 +1,4 @@
-"""左右で最も長い壁を選び、200 mm離れて走る。"""
+"""Select the longest side wall and follow it at the configured target distance."""
 import time
 import RPi.GPIO as GPIO
 from threading import Event, Lock, Thread
@@ -17,49 +17,49 @@ from lidar_wall_follow import WallPIDController
 from newobot import cleanup, dc_motor, set_angle, stop
 
 
-# 壁トレース中に追従する壁との目標距離（mm）。
+# Target distance from the followed wall, in millimeters.
 TARGET_DISTANCE = 280
-# 通常走行時のDCモーター出力。
+# DC motor power during normal driving.
 MOTOR_SPEED = 42
-# 旋回時のDCモーター出力。
+# DC motor power during turns.
 TURN_MOTOR_SPEED = 50
-# 壁との距離誤差に対するPID制御の比例ゲイン。
+# Proportional gain for wall-distance error.
 STEERING_KP = 0.1
-# 壁との距離誤差に対するPID制御の積分ゲイン。
+# Integral gain for wall-distance error.
 STEERING_KI = 0.01
-# 壁との距離誤差に対するPID制御の微分ゲイン。
+# Derivative gain for wall-distance error.
 STEERING_KD = 0.06
-# 壁トレース中に許可するステアリング角度の上限（度）。
+# Maximum steering angle during wall following, in degrees.
 MAX_STEERING_ANGLE = 30.0
-# PID制御で積分値が過剰に蓄積しないための上限。
+# Clamp the accumulated error to prevent integral windup.
 INTEGRAL_LIMIT = 800
-# LiDAR取得と走行制御を繰り返す間隔（秒）。
+# Interval between LiDAR reads and control updates, in seconds.
 INTERVAL = 0.1
-# 前方の壁を検出して旋回を開始する距離（mm）。
+# Front-wall distance that triggers a turn, in millimeters.
 FRONT_WALL_TURN_DISTANCE = 380
-# 前方の壁を検出して旋回方向と角度を事前決定する距離（mm）。
+# Front-wall distance for planning the turn direction and angle, in millimeters.
 FRONT_WALL_PLAN_DISTANCE = 800
-# 旋回時に固定するステアリング角度の大きさ（度）。
+# Fixed steering-angle magnitude during a turn, in degrees.
 TURN_STEERING_ANGLE = 31
-# 壁から算出した旋回角度を実際の目標角度へ補正する減算値（度）。
+# Subtract this correction from the wall-derived target turn angle, in degrees.
 TURN_ANGLE_REDUCTION = 5.0
-# 誤検出による小さな旋回を無視するための最小目標角度（度）。
+# Ignore target turns smaller than this angle, in degrees.
 MIN_TURN_TARGET_ANGLE = 40.0
-# 旋回処理を安全のため強制終了するまでの制限時間（秒）。
+# Maximum allowed turn duration, in seconds.
 TURN_TIMEOUT = 20.0
-# 旋回終了後に車体を停止させておく時間（秒）。
+# Keep the robot stopped for this long after a turn, in seconds.
 TURN_END_STOP_SECONDS = 1.0
-# 追従する左右の壁を長さで選ぶ際に集計する測定回数。
+# Number of wall-length samples used to choose the following side.
 TRACE_SELECTION_SAMPLES = 0
-# 3周完了とみなす旋回回数。
+# Number of turns treated as three completed laps.
 MAX_TURN_COUNT = 12
-# 最終旋回後、前方距離による停止判定を始めるまでの走行時間（秒）。
+# Driving time after the final turn before checking the front stop distance, in seconds.
 FINAL_RUN_STRAIGHT_SECONDS = 2.0
-# 3周完了後に走行を終了する前方壁までの距離（mm）。
+# Front-wall distance at which to stop after three laps, in millimeters.
 FINAL_STOP_FRONT_DISTANCE = 1450
-# 旋回後に左右・前方の壁の役割を固定し直すまでの待機時間（秒）。
+# Wait this long after turning before locking wall roles again, in seconds.
 WALL_ROLE_LOCK_DELAY = 2.0
-# 旋回直後の前方壁を次の壁として誤検出しないための無視時間（秒）。
+# Ignore front-wall detections briefly after a turn to avoid retriggering, in seconds.
 FRONT_WALL_IGNORE_AFTER_TURN_SECONDS = 2.0
 
 
@@ -99,7 +99,7 @@ viewer_data = {
 
 @viewer_app.get("/")
 def viewer_home():
-    """Live Viewer本体をAPIと同じサーバーから配信する。"""
+    """Serve the Live Viewer page from the same server as the API."""
     return send_from_directory(viewer_app.root_path, "index.html")
 
 
@@ -110,7 +110,7 @@ def api_points():
 
 
 def start_viewer_api():
-    """Live Serverのindex.htmlへ走行中のLiDAR判定結果を配信する。"""
+    """Publish driving-time LiDAR results for the index.html Live Viewer."""
 
     viewer_app.run(
         host="0.0.0.0",
@@ -167,7 +167,7 @@ def update_turn_viewer(
     turned_angle,
     status=None
 ):
-    """旋回状態をLive Viewerへ配信する。"""
+    """Publish the current turn state to the Live Viewer."""
 
     with viewer_lock:
         viewer_data["turn"] = {
@@ -182,7 +182,7 @@ def update_turn_viewer(
 
 
 def update_gyro_viewer():
-    """現在のYaw角と読み取り状態をLive Viewerへ配信する。"""
+    """Publish the current yaw angle and gyro read status to the Live Viewer."""
     try:
         yaw = round(get_angle("z"), 1)
         gyro_state = {"ready": True, "yaw": yaw, "error": None}
@@ -194,7 +194,7 @@ def update_gyro_viewer():
 
 
 def choose_turn_direction(_walls, _side_walls, trace_side=None):
-    """最初に固定した追従壁の反対へ曲がる。"""
+    """Turn away from the side wall selected at the start of the run."""
 
     if trace_side == "right":
         return "left"
@@ -202,12 +202,12 @@ def choose_turn_direction(_walls, _side_walls, trace_side=None):
     if trace_side == "left":
         return "right"
 
-    # 追従側が未決定なら、安全のため旋回方向を推測しない。
+    # Do not guess a turn direction before the following side is known.
     return None
 
 
 def lock_wall_role_angles(walls):
-    """現在の分類名と壁の向きを、追従区間用に記録する。"""
+    """Record wall role names and orientations for the current following segment."""
 
     role_angles = {
         wall["role"]: float(wall["normal_angle"])
@@ -236,7 +236,7 @@ def lock_wall_role_angles(walls):
 
 
 def apply_locked_wall_roles(walls, role_angles):
-    """固定した壁の向きに従って分類名を維持する。"""
+    """Preserve wall role names by matching their locked orientations."""
 
     if not role_angles:
         return
@@ -260,7 +260,7 @@ def apply_locked_wall_roles(walls, role_angles):
 
 
 def turn_angle_for_front_wall(front_wall):
-    """前向き軸と前壁の直線が作る角度を、旋回補正込みで返す。"""
+    """Return the angle between forward and the front wall, including turn correction."""
 
     normal_angle = float(front_wall["normal_angle"]) % 180.0
     detected_angle = min(normal_angle, 180.0 - normal_angle)
@@ -268,7 +268,7 @@ def turn_angle_for_front_wall(front_wall):
 
 
 def turn_by_front_wall(front_wall, direction, target_angle=None):
-    """旋回前の前壁情報とジャイロだけを使って旋回する。"""
+    """Turn using the pre-turn front-wall measurement and gyro feedback."""
 
     steering = (
         TURN_STEERING_ANGLE
@@ -361,7 +361,7 @@ GPIO.setup(BUZZER, GPIO.OUT)
 
 
 def run_leds(stop_event, turning_event):
-    """GPIO21を状態表示し、GPIO16・20の輝度を周期的に変える。"""
+    """Show status on GPIO21 and periodically vary the brightness of GPIO16 and GPIO20."""
 
     turn_led_on = True
     pulse_led_on = True
@@ -420,17 +420,17 @@ def run_leds(stop_event, turning_event):
         GPIO.output((BLINK_LED, *PULSE_LEDS), GPIO.LOW)
 
 def buzzer_stop():
-    GPIO.output(BUZZER, GPIO.LOW)   # 止める
+    GPIO.output(BUZZER, GPIO.LOW)   # Silence the buzzer.
     
     
 def buzzer_sleep():
-    GPIO.output(BUZZER, GPIO.HIGH)  # 鳴らす
+    GPIO.output(BUZZER, GPIO.HIGH)  # Sound the buzzer.
     time.sleep(0.1)
-    GPIO.output(BUZZER, GPIO.LOW)   # 止める
+    GPIO.output(BUZZER, GPIO.LOW)   # Silence the buzzer.
 
 
 def signal_run_complete():
-    """全LEDのフェードとブザーで正常終了を通知する。"""
+    """Signal a successful run with an LED fade and buzzer sequence."""
 
     complete_leds = (*PULSE_LEDS, BLINK_LED)
     complete_pwms = [
@@ -712,7 +712,7 @@ def run():
                         continue
 
                     planned_turn_angle = detected_turn_angle
-                    # 旋回開始の予告として、計画確定時点から高速点滅する。
+                    # Start rapid flashing as soon as the turn plan is fixed to signal the upcoming turn.
                     turning_event.set()
                     update_turn_viewer(
                         False,
@@ -774,15 +774,15 @@ def run():
                     "（未検出）/ motor: STOP"
                 )
             else:
-                # 前壁が計画距離内に入り旋回計画が確定した後は、角を
-                # 側壁として拾った際の急な操舵を防ぐためD項を無効化する。
+                # After planning a turn, disable the derivative term so a corner mistaken
+                # for a side wall does not cause a sudden steering change.
                 steering = pid.update(
                     trace_wall,
                     dt,
                     derivative_enabled=planned_turn_angle is None
                 )
-                # カーブ直前は角を側壁として拾ってPID出力が反転することが
-                # ある。旋回計画後は予定方向と逆の操舵だけを抑止する。
+                # Near a corner, a false side-wall detection can reverse the PID output.
+                # Once a turn is planned, suppress steering opposite to the planned direction.
                 if planned_turn_direction == "right":
                     steering = max(0.0, steering)
                 elif planned_turn_direction == "left":

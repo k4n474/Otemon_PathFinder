@@ -1,4 +1,4 @@
-"""LiDARの前壁に対して車体を垂直にするサーボ制御。"""
+"""Use LiDAR and servo control to align the robot perpendicular to the front wall."""
 
 import atexit
 import threading
@@ -8,10 +8,11 @@ from algorithm import detect_walls
 from gyro import close_gyro, get_angle, reset_angle
 from lidar_read import LidarReader
 
-# GPIOを使うnewobotは、インポート時ではなく制御開始時に読み込む。
+# Load newobot when control starts so importing this module does not initialize GPIO.
 brake = dc_motor = set_angle = stop = None
 
 
+# Distances are in millimeters, angles in degrees, and durations in seconds.
 DETECTION_RANGE = 1500.0
 TARGET_NORMAL_ANGLE = 86.0
 ALIGN_KP = 1
@@ -93,7 +94,7 @@ def _load_hardware() -> None:
 
 
 def select_final_target_wall(walls: list[dict]) -> dict | None:
-    """法線がY軸±40°以内の最短壁を、長さに関係なく返す。"""
+    """Return the nearest wall whose normal is within 40 degrees of +Y, regardless of length."""
     candidates = (
         wall for wall in walls
         if abs(signed_angle_error(
@@ -104,12 +105,12 @@ def select_final_target_wall(walls: list[dict]) -> dict | None:
 
 
 def signed_angle_error(angle: float, target: float = TARGET_NORMAL_ANGLE) -> float:
-    """targetからangleまでの最短の符号付き角度差を返す。"""
+    """Return the shortest signed angular difference from target to angle, in degrees."""
     return (float(angle) - float(target) + 180.0) % 360.0 - 180.0
 
 
 class FrontWallAlignmentController:
-    """前壁の傾きからサーボ操舵角を求めるPD制御器。"""
+    """Calculate servo steering from front-wall tilt using PD control."""
 
     def __init__(self) -> None:
         self.previous_error = None
@@ -194,6 +195,7 @@ clockwise_initial_reverse_turn_complete = False
 
 
 def _control_loop() -> None:
+    """Advance parking phases and update steering, speed, and braking each cycle."""
     global drive_started_at, motion_state, state_started_at
     global gyro_reset_attempted, gyro_ready, gyro_error, gyro_yaw
     global straight_target_yaw, left_yaw_sign, turn_start_yaw
@@ -215,16 +217,16 @@ def _control_loop() -> None:
             if motion_state in FINAL_WALL_STATES
             else classified_front_wall
         )
-        # 現在の工程で選ばれた目標壁だけを、姿勢制御と
-        # 停止距離判定に使用する。
+        # Use only the target wall selected for the current phase for both
+        # alignment and stop-distance checks.
         front_distance = (
             float(front_wall["wall_distance"])
             if front_wall is not None
             else None
         )
         if motion_state == "driving_straight":
-            # 直進区間ではLiDARの壁角度を操舵に使わない。
-            # LiDARはfront_distanceによる減速・停止判定だけに使用する。
+            # Use gyro feedback for steering during the straight segment.
+            # Use LiDAR front_distance only for slowing down and stopping in this phase.
             alignment = controller.update(None, started_at, front_distance)
         else:
             alignment = controller.update(
@@ -242,6 +244,7 @@ def _control_loop() -> None:
                 motion_state = "turn_error"
                 gyro_yaw = None
 
+        # Transition only after a distance, yaw, or timed braking condition is met.
         if motion_state == "forward" and (
             front_distance is not None
             and front_distance <= FRONT_STOP_DISTANCE
@@ -292,8 +295,8 @@ def _control_loop() -> None:
             and abs(gyro_yaw) >= LEFT_TURN_TARGET_ANGLE
         ):
             left_yaw_sign = 1.0 if gyro_yaw >= 0.0 else -1.0
-            # 旋回終了時の実測角度をそのまま保持目標にする。
-            # 固定90°へ戻そうとする切替直後の急な反対舵を防ぐ。
+            # Hold the measured yaw at the end of the turn as the new heading target.
+            # This avoids sudden opposite steering to return to an exact 90-degree target.
             straight_target_yaw = gyro_yaw
             motion_state = "driving_straight"
             state_started_at = started_at
@@ -319,8 +322,8 @@ def _control_loop() -> None:
                     straight_near_samples
                     >= STRAIGHT_DISTANCE_CONFIRM_SAMPLES
                 ):
-                    # 時計回りは接近、反時計回りは後進で離れて
-                    # 目標距離へ達した場合だけ停止する。
+                    # For clockwise runs, approach the wall; for counterclockwise runs, reverse away.
+                    # Stop only after reaching the target distance in the required direction.
                     motion_state = "second_turn_braking"
                     state_started_at = started_at
             else:
@@ -337,7 +340,7 @@ def _control_loop() -> None:
             and turn_start_yaw is not None
             and abs(gyro_yaw - turn_start_yaw) >= SECOND_LEFT_TURN_ANGLE
         ):
-            # 旋回完了後、余分な直進を挟まず直ちに姿勢制御へ移る。
+            # Move directly from the completed turn to alignment control.
             motion_state = "final_forward"
             state_started_at = started_at
             drive_started_at = None
@@ -349,7 +352,7 @@ def _control_loop() -> None:
             state_started_at = started_at
             controller.reset()
             try:
-                # 最後の10 cm到達時を、後退旋回用ジャイロの0°にする。
+                # Use the final 10 cm arrival point as zero yaw for the reverse turn.
                 reset_angle("z")
                 gyro_yaw = round(get_angle("z"), 1)
                 gyro_ready = True
@@ -547,8 +550,8 @@ def _control_loop() -> None:
                 pass
             alignment["servo_error"] = str(error)
 
-        # 後退完了後、ブレーキ状態を一定時間維持して車体が停止してから、
-        # 一度だけヨー角を0°へリセットする。
+        # After reversing, hold the brake until the robot has settled,
+        # then reset yaw to zero once.
         if (
             motion_state == "complete"
             and not gyro_reset_attempted
@@ -581,7 +584,7 @@ def _control_loop() -> None:
 
 
 def _reset_runtime(run_direction: int) -> None:
-    """新しい駐車走行用に、制御状態を初期値へ戻す。"""
+    """Reset the control state before starting a new parking run."""
     global RUN_DIRECTION, drive_started_at, motion_state
     global state_started_at, gyro_reset_attempted, gyro_ready, gyro_error
     global gyro_yaw, straight_target_yaw, left_yaw_sign, turn_start_yaw
@@ -606,7 +609,7 @@ def _reset_runtime(run_direction: int) -> None:
 
 
 def start_parking(run_direction: int) -> threading.Thread:
-    """方向（0=時計回り、1=反時計回り）を指定して駐車制御を開始する。"""
+    """Start parking in the specified direction: 0 clockwise or 1 counterclockwise."""
     global control_running, control_thread, gyro_ready, gyro_error, gyro_yaw
     global state_started_at
     if run_direction not in (CLOCKWISE, COUNTERCLOCKWISE):
@@ -617,7 +620,7 @@ def start_parking(run_direction: int) -> threading.Thread:
     _load_hardware()
     _reset_runtime(run_direction)
     if run_direction == COUNTERCLOCKWISE:
-        # 最初の右80°旋回用に、制御開始前のヨー角を0°へ合わせる。
+        # Reset yaw before the initial 80-degree right turn.
         reset_angle("z")
         gyro_ready = True
         gyro_error = None
@@ -635,7 +638,7 @@ def start_parking(run_direction: int) -> threading.Thread:
 
 
 def stop_parking() -> None:
-    """駐車制御を止め、モーター・ジャイロ・LiDARを安全に終了する。"""
+    """Stop parking and shut down the motor, gyro, and LiDAR safely."""
     global control_running, control_thread
     if not control_running and control_thread is None and stop is None:
         return

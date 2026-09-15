@@ -1,3 +1,5 @@
+"""Measure ultrasonic read latency and gyro API latency on the robot."""
+
 import time
 
 from gyro import close_gyro, get_angle
@@ -5,6 +7,7 @@ from ultrasound import cleanup_sensors, dis_get, us_get
 
 
 def bench_ultrasound_single(count=30):
+    """Time individual front-distance readings and count failed measurements."""
     print("ultrasound us_get()")
     total = 0.0
     misses = 0
@@ -23,6 +26,7 @@ def bench_ultrasound_single(count=30):
 
 
 def bench_ultrasound_median(samples=10, count=5):
+    """Time repeated batches of median-filtered distance readings."""
     print(f"ultrasound dis_get(samples={samples})")
     for index in range(count):
         start = time.perf_counter()
@@ -33,6 +37,7 @@ def bench_ultrasound_median(samples=10, count=5):
 
 
 def bench_gyro(count=100):
+    """Time angle access, including lazy initialization on the first call."""
     print("gyro get_angle('z')")
     start = time.perf_counter()
     for _ in range(count):

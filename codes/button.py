@@ -1,4 +1,4 @@
-"""競技開始ボタンの入力処理。"""
+"""Handle the button used to start a competition run."""
 
 import time
 
@@ -11,10 +11,10 @@ BUTTON_POLL_INTERVAL_SECONDS = 0.01
 
 
 def button_sleep(pin=BUTTON_PIN):
-    """指定したGPIOのボタンが押されるまで待機する。
+    """Wait until the button on the specified GPIO pin is pressed.
 
-    ボタンは内部プルアップを使用し、押下時にGPIOとGNDが接続される
-    アクティブLOW配線を想定する。
+    Use the internal pull-up resistor with active-low wiring: pressing the
+    button connects the GPIO pin to ground.
     """
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -22,6 +22,7 @@ def button_sleep(pin=BUTTON_PIN):
     print(f"GPIO{pin}のスタートボタンを押してください")
     while True:
         if GPIO.input(pin) == GPIO.LOW:
+            # Confirm the input stays low after contact bounce has settled.
             time.sleep(BUTTON_DEBOUNCE_SECONDS)
             if GPIO.input(pin) == GPIO.LOW:
                 print("スタートボタンが押されました")
