@@ -6,7 +6,32 @@
 </p>
 
 
+- [Hardware](#hardware)
 
+  - [Photos of Robots](#photos-of-robots)
+
+  - [Videos](#videos)
+
+  - [Controller](#controller)
+
+  - [LiDAR](#lidar)
+
+  - [Camera](#camera)
+
+  - [Chassis](#chassis)
+
+  - [Steering Mechanism](#steering-mechanism)
+
+  - [Electrical System](#electrical-system)
+
+
+- [Software](#software)
+
+  - [Open Challenge](#open-challenge)
+
+  - [Obstacle Challenge](#obstacle-challenge)
+
+# Hardware
 
 ## Photos of Robots
 
@@ -36,10 +61,38 @@
 </p>
 
 ## Videos
-[Open_ChallengeCounter-clockwise](https://youtu.be/6eP5m4vgBc8)<br>
-[Open_Challenge_clockwise](https://youtu.be/HAOU7pk2X0k)<br>
-[Obstacle_ChallengeCounter-clockwise](https://youtu.be/kFfds26Y_WM)<br>
-[Obstacle_Challenge_clockwise](https://youtu.be/7NU6L5QEaes)
+<table align="center">
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://youtu.be/6eP5m4vgBc8">
+        <img src="https://img.youtube.com/vi/6eP5m4vgBc8/maxresdefault.jpg" width="100%"><br>
+        <sub><b>Open_ChallengeCounter-clockwise</b></sub>
+      </a>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://youtu.be/HAOU7pk2X0k">
+        <img src="https://img.youtube.com/vi/HAOU7pk2X0k/maxresdefault.jpg" width="100%"><br>
+        <sub><b>Open_Challenge_clockwise</b></sub>
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://youtu.be/kFfds26Y_WM">
+        <img src="https://img.youtube.com/vi/kFfds26Y_WM/maxresdefault.jpg" width="100%"><br>
+        <sub><b>Obstacle_ChallengeCounter-clockwise</b></sub>
+      </a>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://youtu.be/7NU6L5QEaes">
+        <img src="https://img.youtube.com/vi/7NU6L5QEaes/maxresdefault.jpg" width="100%"><br>
+        <sub><b>Obstacle_Challenge_clockwise</b></sub>
+      </a>
+    </td>
+  </tr>
+</table>
+
+
 
 ## Controller
 
