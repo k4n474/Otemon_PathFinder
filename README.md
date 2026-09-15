@@ -131,6 +131,8 @@ The Raspberry Pi is powered by a **5,000 mAh USB Power Delivery (PD) power bank*
 
 To simplify wiring as additional functions were added, we also designed and manufactured a **custom Raspberry Pi HAT board**(Jun. 2026). This board organizes the wiring, simplifies assembly and maintenance, and improves the overall maintainability of the robot.
 
+![Wiring](images/Other_images/Wiring.jpg)
+
 # Software
 
 ## Open Challenge
@@ -156,3 +158,7 @@ For example, if the object is green, the robot draws a line from the bottom-righ
 ![Obstacle_image](images/Other_images/Obstacle_image.png)
 
 Lap counting is done by counting how many times the blue line is detected. When the blue line transitions from detected to not detected, the lap count is incremented by 1. For a few seconds after detecting the blue line, detections are ignored to prevent false double-counting when the same line briefly disappears and reappears in the camera view.
+
+<p align="center">
+  <img src="images/Other_images/Flow_Chart.jpg" alt="Flow_Chart" width="45%">
+</p>
