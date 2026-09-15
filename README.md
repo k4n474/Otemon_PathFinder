@@ -12,6 +12,8 @@
 
   - [Videos](#videos)
 
+  - [Main Components](#main-components)
+
   - [Controller](#controller)
 
   - [LiDAR](#lidar)
@@ -92,7 +94,17 @@
   </tr>
 </table>
 
+## Main Components
 
+| Category| Model | 
+|---|---|
+| Controller | Raspberry Pi 5 |
+| Subcomputer| Seeed XIAO RP2040 |
+| LiDAR | T-mini Plus 12 |
+| Camera | Camera Module 3 Wide |
+| Motor Driver | DRV8871 | 
+| Servo Motor | SG90 |
+| Connectors | PWR-USBDCDC5 |
 
 ## Controller
 
