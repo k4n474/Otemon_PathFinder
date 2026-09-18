@@ -900,8 +900,11 @@ class PiColorDetector:
             self.preview.stop()
             self.preview = None
         if self.camera is not None:
-            self.camera.stop()
-            self.camera = None
+            try:
+                self.camera.stop()
+            finally:
+                self.camera.close()
+                self.camera = None
 
     def _build_recording_path(self):
         if self.recording_path is not None:

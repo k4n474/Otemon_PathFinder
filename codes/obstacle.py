@@ -6,8 +6,11 @@ The run has three main stages:
 3. Stop after the required crossings and challenge-specific finish conditions.
 """
 
+import math
 import time
 
+import cv2
+import numpy as np
 import RPi.GPIO as GPIO
 
 from camera_detector import (
@@ -60,7 +63,7 @@ BACK_CHECK_SECONDS = 1.25  # Duration of the backup maneuver, in seconds.
 
 # Blue-line crossing detection.
 BLUE_LINE_COOLDOWN_SECONDS = 2.5  # Ignore interval after a crossing to prevent duplicate counts, in seconds.
-BLUE_LINE_CROSSING_TARGET = 12  # Required crossing count before checking finish conditions.
+BLUE_LINE_CROSSING_TARGET = 4  # Required crossing count before checking finish conditions.
 BLUE_LINE_LOST_CONFIRM_SECONDS = 1.5  # Required blue-line absence for direction=0, in seconds.
 BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE = 2  # Required blue-line absence for direction=1, in seconds.
 
@@ -164,6 +167,74 @@ def gyro_turn(
 
     print(f"\nジャイロ旋回完了: {turned_angle:.1f}°")
     return turned_angle
+
+
+def gyro_pd(
+    power,
+    duration,
+    target_angle=None,
+    *,
+    kp=1.0,
+    kd=0.1,
+    max_steering=30.0,
+    interval=0.01,
+):
+    """Hold a yaw angle with PD steering for duration seconds, then stop.
+
+    Positive power drives forward; negative power drives backward. If omitted,
+    target_angle is the starting yaw. Explicit targets use get_angle("z")'s
+    reference (the last gyro reset); this function does not reset the gyro.
+    Return the last measured yaw. Gains and steering angles are in degrees.
+    """
+    values = (power, duration, kp, kd, max_steering, interval)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("gyro_pd の引数は有限の数値にしてください。")
+    if not 0 < abs(power) <= 100:
+        raise ValueError("power は -100〜100 の範囲で、0以外にしてください。")
+    if duration <= 0 or interval <= 0:
+        raise ValueError("duration と interval は0より大きくしてください。")
+    if kp < 0 or kd < 0 or not 0 < max_steering <= 50:
+        raise ValueError("kp・kd は0以上、max_steering は0より大きく50以下にしてください。")
+    if target_angle is not None and not math.isfinite(target_angle):
+        raise ValueError("target_angle は有限の数値にしてください。")
+
+    travel_sign = 1.0 if power > 0 else -1.0
+    try:
+        # Initialize/calibrate the gyro while stationary, before starting the timer.
+        stop()
+        current_angle = get_angle("z")
+        if not math.isfinite(current_angle):
+            raise RuntimeError("ジャイロの角度が不正です。")
+        if target_angle is None:
+            target_angle = current_angle
+        previous_error = None
+        previous_time = None
+        deadline = time.monotonic() + duration
+        motor_started = False
+
+        while True:
+            current_angle = get_angle("z")
+            if not math.isfinite(current_angle):
+                raise RuntimeError("ジャイロの角度が不正です。")
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            error = target_angle - current_angle
+            derivative = 0.0
+            if previous_time is not None and now > previous_time:
+                derivative = (error - previous_error) / (now - previous_time)
+            steering = travel_sign * (kp * error + kd * derivative)
+            set_angle(max(-max_steering, min(max_steering, steering)))
+            if not motor_started:
+                dc_motor(power)
+                motor_started = True
+            previous_error = error
+            previous_time = now
+            time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+        return current_angle
+    finally:
+        stop()
+        set_angle(0)
 
 
 def update_blue_line_crossing(result):
@@ -590,7 +661,7 @@ def _run_obstacle_challenge(
         "magenta_condition_met": False,
     }
     try:
-        # Reuse the running camera when it was passed on by back_check.
+        # Reuse the running camera passed on by back_check or out_park.
         if detector.camera is None:
             detector.start()
         # lidar.start()
@@ -694,28 +765,78 @@ def obstacle_challenge_np(power):
     finally:
         GPIO.output(REAR_LIGHT_PIN, GPIO.LOW)
 
-def out_park(direction):
-    set_angle(0)
-    dc_motor(-30)
-    time.sleep(0.5)
-    stop()
+def out_park(keep_camera_running=False):
+    reset_angle()
+    started_detector_here = detector.camera is None
+    try:
+        if started_detector_here:
+            detector.start()
+        result = detector.process_once()
+        height, width = result["frame"].shape[:2]
+        court = result.get("court")
+        court_mask = court["mask"] if court is not None else np.zeros((height, width), dtype=np.uint8)
 
-    if direction == 0:
-        set_angle(40)
-    else:
-        set_angle(-40)
-    dc_motor(30)
-    time.sleep(1)
+        center_x = width // 2
+        left_mask = court_mask[:, :center_x]
+        right_mask = court_mask[:, center_x:]
+        left_ratio = cv2.countNonZero(left_mask) / left_mask.size if left_mask.size else 0.0
+        right_ratio = cv2.countNonZero(right_mask) / right_mask.size if right_mask.size else 0.0
+        # Left (1) is also the fallback when both sides are equal or absent.
+        direction = 0 if right_ratio > left_ratio else 1
 
-    set_angle(0)
-    time.sleep(1)
-    stop()
+        set_angle(0)
+        dc_motor(-30)
+        time.sleep(0.5)
+        stop()
+
+        if direction == 0:
+            set_angle(35)
+        else:
+            set_angle(-40)
+        dc_motor(30)
+        time.sleep(1.1)
+
+        set_angle(0)
+        time.sleep(0.5)
+        stop()
+
+        result = detector.process_once()
+        object_detected = any(
+            obj["area"] >= 1500
+            for color in ("red_objects", "green_objects")
+            for obj in result.get(color, [])
+        )
+        print(object_detected)
+
+        if object_detected == True:
+            if direction == 0:
+                gyro_turn(0,-25,20)
+                gyro_pd(-30,3,target_angle=-10, kp=2.0, kd=0.1)
+            else:
+                dc_motor(30)
+                time.sleep(0.8)
+                stop()
+                gyro_turn(0,25,20)
+                gyro_pd(-30,4,target_angle=10, kp=2.0, kd=0.1)
+
+            
+
+        return direction
+    finally:
+        stop()
+        if started_detector_here and not keep_camera_running:
+            detector.stop()
+
 
 def main():
     
-    button_sleep()
-    obstacle_challenge_np(30)
-    stop()
+    # button_sleep()
+    try:
+        direction = out_park(keep_camera_running=True)
+        obstacle_challenge(40,direction)
+    finally:
+        stop()
+        detector.stop()
 
 if __name__ == "__main__":
     main()
