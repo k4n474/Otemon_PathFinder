@@ -28,12 +28,10 @@ from newobot import dc_motor, set_angle, stop, cleanup
 
 try:
     while True:
-        
-        while True:
-            dc_motor(40)
-            sleep(1)
-            dc_motor(-40)
-            sleep(1)
+        set_angle(30)
+        sleep(1)
+        set_angle(-30)
+        sleep(1)
 
 
 finally:

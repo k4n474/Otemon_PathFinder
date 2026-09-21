@@ -727,7 +727,7 @@ def build_black_wall_probe_line(primary, frame, direction=1):
 
 
 def build_search_black_wall_probe_line(frame, direction):
-    """Place a short vertical probe near the bottom on the search-direction side."""
+    """Probe from the outer image edge to the lower search-direction point."""
     frame_height, frame_width = frame.shape[:2]
     x = (
         frame_width - 1 - BLACK_WALL_PROBE_END_X
@@ -736,7 +736,8 @@ def build_search_black_wall_probe_line(frame, direction):
     )
     bottom_y = frame_height - 1
     top_y = max(0, bottom_y - SEARCH_BLACK_WALL_PROBE_LENGTH)
-    return ((int(x), top_y), (int(x), bottom_y))
+    top_x = frame_width - 1 if direction == 0 else 0
+    return ((top_x, top_y), (int(x), bottom_y))
 
 
 def measure_black_wall_ratio(frame, probe_line=None, valid_mask=None):

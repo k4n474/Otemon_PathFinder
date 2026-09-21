@@ -19,16 +19,20 @@ from newobot import cleanup, dc_motor, set_angle, stop
 
 # Target distance from the followed wall, in millimeters.
 TARGET_DISTANCE = 280
+# Distance used to check the shorter wall at the start, in millimeters.
+START_SHORTER_WALL_DISTANCE = 300
+# Ignore front-wall control decisions briefly after the initial reverse.
+START_REVERSE_FRONT_IGNORE_SECONDS = 2.5
 # DC motor power during normal driving.
 MOTOR_SPEED = 42
 # DC motor power during turns.
 TURN_MOTOR_SPEED = 50
 # Proportional gain for wall-distance error.
-STEERING_KP = 0.1
+STEERING_KP = 0.05
 # Integral gain for wall-distance error.
-STEERING_KI = 0.01
+STEERING_KI = 0#0.01
 # Derivative gain for wall-distance error.
-STEERING_KD = 0.06
+STEERING_KD = 0.1#0.06
 # Maximum steering angle during wall following, in degrees.
 MAX_STEERING_ANGLE = 30.0
 # Clamp the accumulated error to prevent integral windup.
@@ -37,7 +41,7 @@ INTEGRAL_LIMIT = 800
 INTERVAL = 0.1
 # Front-wall distance that triggers a turn, in millimeters.
 FRONT_WALL_TURN_DISTANCE = 380
-# Front-wall distance for planning the turn direction and angle, in millimeters.
+# Front-wall distance at which the turn angle is fixed, in millimeters.
 FRONT_WALL_PLAN_DISTANCE = 800
 # Fixed steering-angle magnitude during a turn, in degrees.
 TURN_STEERING_ANGLE = 31
@@ -49,8 +53,8 @@ MIN_TURN_TARGET_ANGLE = 40.0
 TURN_TIMEOUT = 20.0
 # Keep the robot stopped for this long after a turn, in seconds.
 TURN_END_STOP_SECONDS = 1.0
-# Number of wall-length samples used to choose the following side.
-TRACE_SELECTION_SAMPLES = 0
+# Wait for fresh LiDAR readings before selecting the wall to follow.
+TRACE_SELECTION_WAIT_SECONDS = 1.0
 # Number of turns treated as three completed laps.
 MAX_TURN_COUNT = 12
 # Driving time after the final turn before checking the front stop distance, in seconds.
@@ -485,12 +489,7 @@ def run():
         name="status-led"
     )
     trace_side = None
-    trace_length_totals = {
-        "left": 0.0,
-        "right": 0.0
-    }
-    trace_selection_count = 0
-    planned_turn_direction = None
+    trace_selection_ready_at = None
     planned_turn_angle = None
     turn_count = 0
     final_run_active = False
@@ -587,6 +586,21 @@ def run():
                 if control_front_wall is not None
                 else None
             )
+            if (
+                not final_run_active
+                and planned_turn_angle is None
+                and control_front_wall is not None
+                and detected_turn_angle is not None
+                and detected_turn_angle > MIN_TURN_TARGET_ANGLE
+                and control_front_wall["front_distance"]
+                <= FRONT_WALL_PLAN_DISTANCE
+            ):
+                planned_turn_angle = detected_turn_angle
+                print(
+                    "\n旋回角度を確定: "
+                    f"{planned_turn_angle:.1f}°"
+                    f" / 前壁まで {control_front_wall['front_distance']:.1f} mm"
+                )
             target_turn_angle = (
                 planned_turn_angle
                 if planned_turn_angle is not None
@@ -621,13 +635,10 @@ def run():
                 and control_front_wall["front_distance"]
                 <= FRONT_WALL_TURN_DISTANCE
             ):
-                turn_direction = (
-                    planned_turn_direction
-                    or choose_turn_direction(
-                        detected_walls,
-                        side_walls,
-                        trace_side
-                    )
+                turn_direction = choose_turn_direction(
+                    detected_walls,
+                    side_walls,
+                    trace_side
                 )
                 if turn_direction is None:
                     stop()
@@ -683,105 +694,78 @@ def run():
                         f"停止距離 {FINAL_STOP_FRONT_DISTANCE} mm"
                     )
 
-                planned_turn_direction = None
                 planned_turn_angle = None
                 previous_time = time.monotonic()
                 continue
-
-            if (
-                not final_run_active
-                and control_front_wall is not None
-                and detected_turn_angle is not None
-                and detected_turn_angle > MIN_TURN_TARGET_ANGLE
-                and control_front_wall["front_distance"]
-                <= FRONT_WALL_PLAN_DISTANCE
-            ):
-                if planned_turn_angle is None:
-                    planned_turn_direction = choose_turn_direction(
-                        detected_walls,
-                        side_walls,
-                        trace_side
-                    )
-                    if planned_turn_direction is None:
-                        stop()
-                        set_angle(0)
-                        print(
-                            "\n旋回方向を計画できないため停止します"
-                        )
-                        time.sleep(INTERVAL)
-                        continue
-
-                    planned_turn_angle = detected_turn_angle
-                    # Start rapid flashing as soon as the turn plan is fixed to signal the upcoming turn.
-                    turning_event.set()
-                    update_turn_viewer(
-                        False,
-                        planned_turn_direction,
-                        planned_turn_angle,
-                        0.0,
-                        status="planned"
-                    )
-                    print(
-                        "\n旋回計画を確定: "
-                        f"{planned_turn_direction}"
-                        f" / {planned_turn_angle:.1f}°"
-                        f" / 前壁まで"
-                        f" {control_front_wall['front_distance']:.1f} mm"
-                    )
 
             left_wall = side_walls["left"]
             right_wall = side_walls["right"]
 
             if trace_side is None:
                 if left_wall is not None and right_wall is not None:
-                    trace_length_totals["left"] += left_wall["length"]
-                    trace_length_totals["right"] += right_wall["length"]
-                    trace_selection_count += 1
-
-                    if trace_selection_count >= TRACE_SELECTION_SAMPLES:
+                    if trace_selection_ready_at is None:
+                        trace_selection_ready_at = (
+                            current_time + TRACE_SELECTION_WAIT_SECONDS
+                        )
+                        print("\n左右の壁を検出: 1秒待ってから距離を測定します")
+                    elif current_time >= trace_selection_ready_at:
                         trace_side = max(
                             ("left", "right"),
-                            key=lambda side: trace_length_totals[side]
+                            key=lambda side: side_walls[side]["length"]
                         )
                         pid.reset()
                         print(
                             "\n追従壁を確定: "
                             f"{trace_side}"
-                            " / 平均長 left="
-                            f"{trace_length_totals['left'] / trace_selection_count:.1f} mm"
+                            " / 長さ left="
+                            f"{left_wall['length']:.1f} mm"
                             " / right="
-                            f"{trace_length_totals['right'] / trace_selection_count:.1f} mm"
+                            f"{right_wall['length']:.1f} mm"
                         )
-                        if (
-                            trace_length_totals["right"] < trace_length_totals["left"]
-                            and right_wall["wall_distance"] <= 300
-                        ):
-                            print("短い壁が右側で、壁まで30cm以内です")
-                            set_angle(-35)
-                            dc_motor(-42)
-                            time.sleep(0.7)
-                            set_angle(35)
-                            time.sleep(0.3)
-                            stop()
-                            time.sleep(1)
-                        elif (
-                            trace_length_totals["left"] < trace_length_totals["right"]
-                            and left_wall["wall_distance"] <= 300
-                        ):
-                            print("短い壁が左側で、壁まで30cm以内です")
-                            set_angle(35)
-                            dc_motor(-42)
-                            time.sleep(0.7)
-                            set_angle(-35)
-                            time.sleep(0.3)
-                            stop()
-                            time.sleep(1)
+                        shorter_wall_side = min(
+                            ("left", "right"),
+                            key=lambda side: side_walls[side]["length"]
+                        )
+                        shorter_wall_distance = side_walls[shorter_wall_side][
+                            "wall_distance"
+                        ]
+                        within_30cm = (
+                            shorter_wall_distance <= START_SHORTER_WALL_DISTANCE
+                        )
+                        print(
+                            "スタート時の短い方の壁: "
+                            f"{shorter_wall_side} / "
+                            f"距離 {shorter_wall_distance:.1f} mm / "
+                            f"30 cm以内: {'はい' if within_30cm else 'いいえ'}"
+                        )
+                        if within_30cm:
+                            steering_sign = -1 if shorter_wall_side == "left" else 1
+                            print("スタート時: 舵を左右35°に切って後退します")
+                            try:
+                                set_angle(-35 * steering_sign)
+                                dc_motor(-MOTOR_SPEED)
+                                time.sleep(0.7)
+                                set_angle(35 * steering_sign)
+                                dc_motor(-MOTOR_SPEED)
+                                time.sleep(0.3)
+
+                            finally:
+                                stop()
+                                time.sleep(1)
+                            # The angled reverse changes the robot's heading.
+                            # Reclassify walls using the new heading before driving.
+                            locked_role_angles = None
+                            role_lock_ready_at = (
+                                time.monotonic() + WALL_ROLE_LOCK_DELAY
+                            )
+                            front_wall_ignore_until = (
+                                time.monotonic()
+                                + START_REVERSE_FRONT_IGNORE_SECONDS
+                            )
+                            previous_time = time.monotonic()
+                            continue
                 else:
-                    trace_length_totals = {
-                        "left": 0.0,
-                        "right": 0.0
-                    }
-                    trace_selection_count = 0
+                    trace_selection_ready_at = None
 
             trace_wall = (
                 side_walls[trace_side]
@@ -798,19 +782,7 @@ def run():
                     "（未検出）/ motor: STOP"
                 )
             else:
-                # After planning a turn, disable the derivative term so a corner mistaken
-                # for a side wall does not cause a sudden steering change.
-                steering = pid.update(
-                    trace_wall,
-                    dt,
-                    derivative_enabled=planned_turn_angle is None
-                )
-                # Near a corner, a false side-wall detection can reverse the PID output.
-                # Once a turn is planned, suppress steering opposite to the planned direction.
-                if planned_turn_direction == "right":
-                    steering = max(0.0, steering)
-                elif planned_turn_direction == "left":
-                    steering = min(0.0, steering)
+                steering = pid.update(trace_wall, dt)
                 set_angle(steering)
                 dc_motor(MOTOR_SPEED)
                 status = (

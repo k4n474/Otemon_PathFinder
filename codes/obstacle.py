@@ -26,7 +26,7 @@ from buzzer import buzzer_start, buzzer_stop, buzzer_sleep, hurt_beats
 from button import button_sleep
 from lidar_read import LidarReader
 from lidar_wall_follow import follow_wall_until_front_distance
-from park import start_parking
+from park import start_parking, stop_parking
 # Initialize hardware interfaces.
 # ---------------------------------------------------------------------------
 
@@ -63,7 +63,7 @@ BACK_CHECK_SECONDS = 1.25  # Duration of the backup maneuver, in seconds.
 
 # Blue-line crossing detection.
 BLUE_LINE_COOLDOWN_SECONDS = 2.5  # Ignore interval after a crossing to prevent duplicate counts, in seconds.
-BLUE_LINE_CROSSING_TARGET = 4  # Required crossing count before checking finish conditions.
+BLUE_LINE_CROSSING_TARGET = 5  # Required crossing count before checking finish conditions.
 BLUE_LINE_LOST_CONFIRM_SECONDS = 1.5  # Required blue-line absence for direction=0, in seconds.
 BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE = 2  # Required blue-line absence for direction=1, in seconds.
 
@@ -652,7 +652,7 @@ def _run_obstacle_challenge(
     finish_delay_seconds=0.0,
     require_magenta_absent=False,
 ):
-    """Run the obstacle challenge with the specified finish delay."""
+    """Run the obstacle challenge; return True only on normal completion."""
     finish_state = {
         "finish_at": None,
         "direction": direction,
@@ -701,6 +701,7 @@ def _run_obstacle_challenge(
 
         stop()
         set_angle(0)
+        return True
     except KeyboardInterrupt:
         print("\nCtrl+C を受け付けたため終了します")
         stop()
@@ -721,10 +722,20 @@ def _run_obstacle_challenge(
 
 def obstacle_challenge(power, direction):
     """Stop using the same blue-line absence and magenta-count rules as the np variant."""
-    _run_obstacle_with_rear_light(
+    return _run_obstacle_with_rear_light(
         power,
         direction,
         require_magenta_absent=True,
+    )
+
+
+def obstacle_challenge_p(power, direction):
+    """Continue driving for 0.5 seconds after the blue-line count reaches the target."""
+    return _run_obstacle_with_rear_light(
+        power,
+        direction,
+        finish_delay_seconds=0.5,
+        require_magenta_absent=False,
     )
 
 
@@ -739,7 +750,7 @@ def _run_obstacle_with_rear_light(
     GPIO.setup(REAR_LIGHT_PIN, GPIO.OUT, initial=GPIO.LOW)
     GPIO.output(REAR_LIGHT_PIN, GPIO.HIGH)
     try:
-        _run_obstacle_challenge(
+        return _run_obstacle_challenge(
             power,
             direction,
             finish_delay_seconds=finish_delay_seconds,
@@ -829,12 +840,16 @@ def out_park(keep_camera_running=False):
 
 
 def main():
-    
+    parking_thread = None
     # button_sleep()
     try:
         direction = out_park(keep_camera_running=True)
-        obstacle_challenge(40,direction)
+        if obstacle_challenge_p(30, direction):
+            parking_thread = start_parking(direction)
+            parking_thread.join()
     finally:
+        if parking_thread is not None:
+            stop_parking()
         stop()
         detector.stop()
 

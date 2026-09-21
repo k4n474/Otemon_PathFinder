@@ -291,14 +291,14 @@
                 const response = await fetch(
                     API_URL,
                     {
-                        cache: "no-store"
+                        cache: "no-store",
+                        signal: AbortSignal.timeout(3000)
                     }
                 );
 
                 if (!response.ok) {
-                    throw new Error(
-                        `HTTP ${response.status}`
-                    );
+                    const detail = await response.json().catch(() => ({}));
+                    throw new Error(detail.error || `HTTP ${response.status}`);
                 }
 
                 const data =
