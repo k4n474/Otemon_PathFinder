@@ -177,13 +177,15 @@ class MovementTest(unittest.TestCase):
         self.assertIs(front, walls[0])
         self.assertEqual(sides["left"]["wall_distance"], 250)
         self.assertIsNone(sides["right"])
-        with patch.object(control, "_read_walls", side_effect=[walls, self.frame(150)]):
+        reached_walls = self.frame(150)
+        reached_walls[0]["normal_angle"] = 100
+        with patch.object(control, "_read_walls", side_effect=[walls, reached_walls]):
             control.lidar_front(150, 30)
-        self.assertEqual(self.motor.set_angle.call_args_list[0].args[0], -10)
+        self.assertEqual(self.motor.set_angle.call_args_list[0].args[0], -15)
         self.motor.dc_motor.assert_called_once_with(30)
 
     def test_front_tilt_control_without_side_wall(self):
-        for normal, expected in [(100, -10), (80, 10), (91, 0), (140, -30)]:
+        for normal, expected in [(100, -15), (80, 5), (91, -6), (140, -30)]:
             self.motor.reset_mock()
             with patch.object(control, "read_front_wall", side_effect=[
                 {"wall_distance": 600, "normal_angle": normal},
@@ -202,7 +204,7 @@ class MovementTest(unittest.TestCase):
         ]):
             self.assertEqual(control.lidar_front(450, -30, "left", 250), 450)
         self.motor.dc_motor.assert_called_once_with(-30)
-        self.assertEqual(self.motor.set_angle.call_args_list[0].args[0], 10)
+        self.assertEqual(self.motor.set_angle.call_args_list[0].args[0], 15)
         self.motor.stop.assert_called_once()
         self.motor.set_angle.assert_called_with(0)
 

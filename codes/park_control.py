@@ -208,7 +208,10 @@ def _read_walls(detection_range=1500.0):
 
 def _select_front_wall(walls, final_wall=False):
     if final_wall:
-        walls = [w for w in walls if abs((w["normal_angle"] - 90 + 180) % 360 - 180) <= 40]
+        walls = [
+            w for w in walls
+            if abs((float(w.get("normal_angle", math.nan)) - 90 + 180) % 360 - 180) <= 40
+        ]
     else:
         walls = [w for w in walls if w.get("is_front_wall")]
     return min(walls, key=lambda w: w["wall_distance"], default=None)
@@ -312,9 +315,9 @@ def lidar_backward(target_distance, power=30, side="left", target_side_distance=
                         kp=SIDE_KP, kd=SIDE_KD, max_steering=SIDE_MAX_STEERING)
 
 
-# 前壁に正対する法線角度は90°。機体に合わせた調整はここで行う。
-FRONT_TARGET_ANGLE = 90.0
-FRONT_KP = 0.2
+# 前壁に正対する法線角度。機体の取り付け誤差を含めて85°に補正する。
+FRONT_TARGET_ANGLE = 85.0
+FRONT_KP = 0.25
 FRONT_KD = 0.1
 FRONT_MAX_STEERING = 30.0
 FRONT_ANGLE_DEADBAND = 1.5
@@ -326,13 +329,15 @@ def lidar_front(target_distance, power=30, side="left", target_side_distance=Non
     lidar_front(150, 30, "left", 250)
     引数の順序はlidar_forwardと同じ。sideとtarget_side_distanceは
     呼び出し互換用で、制御には使わない（横壁の検出も不要）。
+    壁の並びによる役割分類は使わず、機体前方（90±40°）の壁を直接選ぶ。
     前壁の法線角をFRONT_TARGET_ANGLEに合わせる。
     前進は前壁距離が目標以下、後退は目標以上で停止。
     例: lidar_front(450, -30) は前壁から450mmまで後退する。
     """
     return _lidar_drive(target_distance, power, steering="front",
                         target_angle=FRONT_TARGET_ANGLE,
-                        kp=FRONT_KP, kd=FRONT_KD, max_steering=FRONT_MAX_STEERING)
+                        kp=FRONT_KP, kd=FRONT_KD, max_steering=FRONT_MAX_STEERING,
+                        final_wall=True)
 
 
 # ジャイロ距離走行のPD調整値。

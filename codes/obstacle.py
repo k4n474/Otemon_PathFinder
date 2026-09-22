@@ -26,7 +26,11 @@ from buzzer import buzzer_start, buzzer_stop, buzzer_sleep, hurt_beats
 from button import button_sleep
 from lidar_read import LidarReader
 from lidar_wall_follow import follow_wall_until_front_distance
-from park import start_parking, stop_parking
+from park import (
+    start_parking_0, start_parking_1, start_parking_2,
+    start_parking_3, start_parking_4, start_parking_5, stop_parking,
+    start_parking_6, start_parking_7,
+)
 # Initialize hardware interfaces.
 # ---------------------------------------------------------------------------
 
@@ -63,7 +67,8 @@ BACK_CHECK_SECONDS = 1.25  # Duration of the backup maneuver, in seconds.
 
 # Blue-line crossing detection.
 BLUE_LINE_COOLDOWN_SECONDS = 2.5  # Ignore interval after a crossing to prevent duplicate counts, in seconds.
-BLUE_LINE_CROSSING_TARGET = 5  # Required crossing count before checking finish conditions.
+BLUE_LINE_CROSSING_TARGET = 12  # Required crossing count before checking finish conditions.
+BLUE_LINE_CROSSING_TARGET_P = 13  # Required crossing count for obstacle_challenge_p only.
 BLUE_LINE_LOST_CONFIRM_SECONDS = 1.5  # Required blue-line absence for direction=0, in seconds.
 BLUE_LINE_LOST_CONFIRM_SECONDS_DIRECTION_ONE = 2  # Required blue-line absence for direction=1, in seconds.
 
@@ -76,7 +81,7 @@ detector = PiColorDetector(
     detect_court_enabled=True,
     bottom_exclusion_size=BOTTOM_EXCLUSION_SIZE,
 )
-from newobot import dc_motor, set_angle, stop, cleanup
+from newobot import dc_motor, set_angle, stop, brake, cleanup
 
 # ---------------------------------------------------------------------------
 # State shared across driving phases.
@@ -237,7 +242,7 @@ def gyro_pd(
         set_angle(0)
 
 
-def update_blue_line_crossing(result):
+def update_blue_line_crossing(result, finish_state=None):
     """Count a crossing when a blue line changes from invisible to visible.
 
     Ignore blue lines briefly after each count to avoid counting the same
@@ -247,7 +252,8 @@ def update_blue_line_crossing(result):
     global blue_line_was_detected
     global blue_line_ignore_until
 
-    if blue_line_crossing_count >= BLUE_LINE_CROSSING_TARGET:
+    crossing_target = (finish_state or {}).get("crossing_target", BLUE_LINE_CROSSING_TARGET)
+    if blue_line_crossing_count >= crossing_target:
         return blue_line_crossing_count
 
     current_time = time.monotonic()
@@ -279,7 +285,8 @@ def blue_line_finish_reached(
     stayed invisible for the direction-specific duration, then check the
     number of magenta objects.
     """
-    if blue_line_crossing_count < BLUE_LINE_CROSSING_TARGET:
+    crossing_target = (finish_state or {}).get("crossing_target", BLUE_LINE_CROSSING_TARGET)
+    if blue_line_crossing_count < crossing_target:
         return False
 
     if require_magenta_absent:
@@ -416,7 +423,7 @@ def find_obj(
     try:
         while True:
             result = detector.process_once()
-            crossing_count = update_blue_line_crossing(result)
+            crossing_count = update_blue_line_crossing(result, finish_state)
             if blue_line_finish_reached(
                 finish_state,
                 finish_delay_seconds,
@@ -506,7 +513,7 @@ def avoid_obj(
 
     while True:
         result = detector.process_once()
-        crossing_count = update_blue_line_crossing(result)
+        crossing_count = update_blue_line_crossing(result, finish_state)
         primary = result.get("primary_detection")
 
         if blue_line_finish_reached(
@@ -651,9 +658,12 @@ def _run_obstacle_challenge(
     direction,
     finish_delay_seconds=0.0,
     require_magenta_absent=False,
+    crossing_target=BLUE_LINE_CROSSING_TARGET,
+    brake_on_finish=False,
 ):
     """Run the obstacle challenge; return True only on normal completion."""
     finish_state = {
+        "crossing_target": crossing_target,
         "finish_at": None,
         "direction": direction,
         "blue_line_absent_since": None,
@@ -699,7 +709,10 @@ def _run_obstacle_challenge(
             ):
                 break
 
-        stop()
+        if brake_on_finish:
+            brake()
+        else:
+            stop()
         set_angle(0)
         return True
     except KeyboardInterrupt:
@@ -721,21 +734,28 @@ def _run_obstacle_challenge(
 
 
 def obstacle_challenge(power, direction):
-    """Stop using the same blue-line absence and magenta-count rules as the np variant."""
-    return _run_obstacle_with_rear_light(
+    """Apply electrical braking after the normal finish conditions are met."""
+    completed = _run_obstacle_with_rear_light(
         power,
         direction,
         require_magenta_absent=True,
     )
+    if completed:
+        brake()
+    return completed
 
 
-def obstacle_challenge_p(power, direction):
-    """Continue driving for 0.5 seconds after the blue-line count reaches the target."""
+def obstacle_challenge_p(power, direction, po=None):
+    """Finish with direction- and parking-position-specific braking behavior."""
+    brake_on_finish = direction == 0
+    finish_delay_seconds = 0.5 if direction != 0 or po == 1 else 0.0
     return _run_obstacle_with_rear_light(
         power,
         direction,
-        finish_delay_seconds=0.5,
+        finish_delay_seconds=finish_delay_seconds,
         require_magenta_absent=False,
+        crossing_target=BLUE_LINE_CROSSING_TARGET_P,
+        brake_on_finish=brake_on_finish,
     )
 
 
@@ -744,6 +764,8 @@ def _run_obstacle_with_rear_light(
     direction,
     finish_delay_seconds=0.0,
     require_magenta_absent=False,
+    crossing_target=BLUE_LINE_CROSSING_TARGET,
+    brake_on_finish=False,
 ):
     """Keep the rear light on during the challenge and always switch it off afterward."""
     GPIO.setmode(GPIO.BCM)
@@ -755,6 +777,8 @@ def _run_obstacle_with_rear_light(
             direction,
             finish_delay_seconds=finish_delay_seconds,
             require_magenta_absent=require_magenta_absent,
+            crossing_target=crossing_target,
+            brake_on_finish=brake_on_finish,
         )
     finally:
         GPIO.output(REAR_LIGHT_PIN, GPIO.LOW)
@@ -777,6 +801,12 @@ def obstacle_challenge_np(power):
         GPIO.output(REAR_LIGHT_PIN, GPIO.LOW)
 
 def out_park(keep_camera_running=False):
+    """Return (direction, po) using the initial and post-move object checks.
+
+    Direction 0: initially nearby red=6, green=7. Otherwise, after moving,
+    front object area >= 500: red=1, green=2; absent=0.
+    Direction 1: 3 if no nearby object, 4 for red, or 5 for green.
+    """
     reset_angle()
     started_detector_here = detector.camera is None
     try:
@@ -809,14 +839,26 @@ def out_park(keep_camera_running=False):
 
         set_angle(0)
         time.sleep(0.5)
-        stop()
+        brake()
+        time.sleep(1)
 
         result = detector.process_once()
-        object_detected = any(
-            obj["area"] >= 1500
+        nearby_objects = [
+            (color, obj)
             for color in ("red_objects", "green_objects")
             for obj in result.get(color, [])
-        )
+            if obj["area"] >= 1000
+        ]
+        object_detected = bool(nearby_objects)
+        po = 0 if direction == 0 else 3
+        if nearby_objects:
+            color, _obj = max(
+                nearby_objects, key=lambda item: object_front_priority(item[1])
+            )
+            if direction == 0:
+                po = 6 if color == "red_objects" else 7
+            else:
+                po = 4 if color == "red_objects" else 5
         print(object_detected)
 
         if object_detected == True:
@@ -825,14 +867,28 @@ def out_park(keep_camera_running=False):
                 gyro_pd(-30,3,target_angle=-10, kp=2.0, kd=0.1)
             else:
                 dc_motor(30)
-                time.sleep(0.8)
+                time.sleep(0.6)
                 stop()
                 gyro_turn(0,25,20)
-                gyro_pd(-30,4,target_angle=10, kp=2.0, kd=0.1)
+                gyro_pd(-30,3.4,target_angle=10, kp=2.0, kd=0.1)
+
+        if object_detected == False:
+            if direction == 0:
+                dc_motor(30)
+                time.sleep(0.8)
+                brake()
+                time.sleep(0.2)
+                result = detector.process_once()
+                color_name, front_obj = select_front_object(result)
+                if front_obj is not None and front_obj["area"] >= 500:
+                    po = 1 if color_name == "red" else 2
+                    print(f"一番手前のオブジェクト: 色={color_name}, 面積={front_obj['area']}")
+
+
 
             
 
-        return direction
+        return direction, po
     finally:
         stop()
         if started_detector_here and not keep_camera_running:
@@ -843,10 +899,55 @@ def main():
     parking_thread = None
     # button_sleep()
     try:
-        direction = out_park(keep_camera_running=True)
-        if obstacle_challenge_p(30, direction):
-            parking_thread = start_parking(direction)
-            parking_thread.join()
+        direction, po = out_park(keep_camera_running=True)
+        if po == 0:
+            # direction=0: 最初に近接物体なし、追加判定でも対象なし
+            if obstacle_challenge_p(30, direction, po):
+                parking_thread = start_parking_0(direction)
+                parking_thread.join()
+
+        elif po == 1:
+            # direction=0: 追加判定で赤
+            if obstacle_challenge_p(30, direction, po):
+                parking_thread = start_parking_1(direction)
+                parking_thread.join()
+
+        elif po == 2:
+            # direction=0: 追加判定で緑
+            if obstacle_challenge_p(30, direction, po):
+                parking_thread = start_parking_2(direction)
+                parking_thread.join()
+
+        elif po == 3:
+            # direction=1: 近接物体なし
+            if obstacle_challenge_p(30, direction, po):
+                parking_thread = start_parking_3(direction)
+                parking_thread.join()
+
+        elif po == 4:
+            # direction=1: 近接物体が赤
+            if obstacle_challenge_p(30, direction, po):
+                parking_thread = start_parking_4(direction)
+                parking_thread.join()
+
+        elif po == 5:
+            # direction=1: 近接物体が緑
+            if obstacle_challenge_p(30, direction, po):
+                parking_thread = start_parking_5(direction)
+                parking_thread.join()
+
+        elif po == 6:
+            # direction=0: 最初の近接物体が赤
+            if obstacle_challenge_p(30, direction, po):
+                parking_thread = start_parking_6(direction)
+                parking_thread.join()
+
+        elif po == 7:
+            # direction=0: 最初の近接物体が緑
+            print("7777777777777777777777777")
+            if obstacle_challenge_p(30, direction, po):
+                parking_thread = start_parking_7(direction)
+                parking_thread.join()
     finally:
         if parking_thread is not None:
             stop_parking()

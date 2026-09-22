@@ -14,7 +14,7 @@ def detect_walls(
     *,
     distance_threshold: float = 50.0,
     min_inliers: int = 10,
-    min_wall_length: float = 100.0,
+    min_wall_length: float = 500.0,
     max_point_gap: float = 250.0,
     max_walls: int = 4,
     iterations: int = 100,
