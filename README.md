@@ -7,11 +7,11 @@
 
 Meet the Engineers
 
-(👈Left) [Name] led the mechanical design, crafting custom 3D-printed chassis parts, high-precision gears, and robust structural mechanisms.
+(👈Left) [Taiki] led the mechanical design, crafting custom 3D-printed chassis parts, high-precision gears, and robust structural mechanisms.
 
-(🫵Center) [Name] spearheaded the electrical architecture, designing custom PCBs, optimizing power management, and selecting core components.
+(🫵Center) [Kenshin] spearheaded the electrical architecture, designing custom PCBs, optimizing power management, and selecting core components.
 
-(👉Right) [Name] drove software development and computer vision, building algorithm, calibrating sensor inputs, and writing code to keep the robot fully autonomous.
+(👉Right) [Kanata] drove software development and computer vision, building algorithm, calibrating sensor inputs, and writing code to keep the robot fully autonomous.
 
 
 - [Hardware](#hardware)

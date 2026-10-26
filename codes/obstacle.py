@@ -897,57 +897,59 @@ def out_park(keep_camera_running=False):
 
 def main():
     parking_thread = None
-    # button_sleep()
+    button_sleep()
     try:
-        direction, po = out_park(keep_camera_running=True)
-        if po == 0:
-            # direction=0: 最初に近接物体なし、追加判定でも対象なし
-            if obstacle_challenge_p(30, direction, po):
-                parking_thread = start_parking_0(direction)
-                parking_thread.join()
+        
+        obstacle_challenge_np(30)
+        # direction, po = out_park(keep_camera_running=True)
+        # if po == 0:
+        #     # direction=0: 最初に近接物体なし、追加判定でも対象なし
+        #     if obstacle_challenge_p(30, direction, po):
+        #         parking_thread = start_parking_0(direction)
+        #         parking_thread.join()
 
-        elif po == 1:
-            # direction=0: 追加判定で赤
-            if obstacle_challenge_p(30, direction, po):
-                parking_thread = start_parking_1(direction)
-                parking_thread.join()
+        # elif po == 1:
+        #     # direction=0: 追加判定で赤
+        #     if obstacle_challenge_p(30, direction, po):
+        #         parking_thread = start_parking_1(direction)
+        #         parking_thread.join()
 
-        elif po == 2:
-            # direction=0: 追加判定で緑
-            if obstacle_challenge_p(30, direction, po):
-                parking_thread = start_parking_2(direction)
-                parking_thread.join()
+        # elif po == 2:
+        #     # direction=0: 追加判定で緑
+        #     if obstacle_challenge_p(30, direction, po):
+        #         parking_thread = start_parking_2(direction)
+        #         parking_thread.join()
 
-        elif po == 3:
-            # direction=1: 近接物体なし
-            if obstacle_challenge_p(30, direction, po):
-                parking_thread = start_parking_3(direction)
-                parking_thread.join()
+        # elif po == 3:
+        #     # direction=1: 近接物体なし
+        #     if obstacle_challenge_p(30, direction, po):
+        #         parking_thread = start_parking_3(direction)
+        #         parking_thread.join()
 
-        elif po == 4:
-            # direction=1: 近接物体が赤
-            if obstacle_challenge_p(30, direction, po):
-                parking_thread = start_parking_4(direction)
-                parking_thread.join()
+        # elif po == 4:
+        #     # direction=1: 近接物体が赤
+        #     if obstacle_challenge_p(30, direction, po):
+        #         parking_thread = start_parking_4(direction)
+        #         parking_thread.join()
 
-        elif po == 5:
-            # direction=1: 近接物体が緑
-            if obstacle_challenge_p(30, direction, po):
-                parking_thread = start_parking_5(direction)
-                parking_thread.join()
+        # elif po == 5:
+        #     # direction=1: 近接物体が緑
+        #     if obstacle_challenge_p(30, direction, po):
+        #         parking_thread = start_parking_5(direction)
+        #         parking_thread.join()
 
-        elif po == 6:
-            # direction=0: 最初の近接物体が赤
-            if obstacle_challenge_p(30, direction, po):
-                parking_thread = start_parking_6(direction)
-                parking_thread.join()
+        # elif po == 6:
+        #     # direction=0: 最初の近接物体が赤
+        #     if obstacle_challenge_p(30, direction, po):
+        #         parking_thread = start_parking_6(direction)
+        #         parking_thread.join()
 
-        elif po == 7:
-            # direction=0: 最初の近接物体が緑
-            print("7777777777777777777777777")
-            if obstacle_challenge_p(30, direction, po):
-                parking_thread = start_parking_7(direction)
-                parking_thread.join()
+        # elif po == 7:
+        #     # direction=0: 最初の近接物体が緑
+        #     print("7777777777777777777777777")
+        #     if obstacle_challenge_p(30, direction, po):
+        #         parking_thread = start_parking_7(direction)
+        #         parking_thread.join()
     finally:
         if parking_thread is not None:
             stop_parking()
